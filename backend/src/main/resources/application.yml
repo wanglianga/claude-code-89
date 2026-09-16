@@ -1,0 +1,32 @@
+server:
+  port: 8080
+  error:
+    include-message: always
+
+spring:
+  application:
+    name: clothing-recycle
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:db}:${DB_PORT:5432}/${DB_NAME:recycle}
+    username: ${DB_USER:recycle}
+    password: ${DB_PASSWORD:recycle123}
+    hikari:
+      maximum-pool-size: 10
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: true
+    properties:
+      hibernate:
+        format_sql: false
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:Y2xvdGhpbmctcmVjeWNsZS1wbGF0Zm9ybS1zZWNyZXQta2V5LTAtMS0yMDI2LWZvci1qd3QtdG9rZW4=}
+    expire-hours: 24
+  upload:
+    dir: ${UPLOAD_DIR:/app/uploads}

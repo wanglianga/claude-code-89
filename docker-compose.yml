@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-recycle}
+      POSTGRES_USER: ${DB_USER:-recycle}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-recycle123}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-recycle} -d ${DB_NAME:-recycle}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME:-recycle}
+      DB_USER: ${DB_USER:-recycle}
+      DB_PASSWORD: ${DB_PASSWORD:-recycle123}
+      JWT_SECRET: ${JWT_SECRET:-Y2xvdGhpbmctcmVjeWNsZS1wbGF0Zm9ybS1zZWNyZXQta2V5LTAtMS0yMDI2LWZvci1qd3QtdG9rZW4=}
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${CC_PUBLISH_PORT:-3089}:80"
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - internal
+
+networks:
+  internal:
+
+volumes:
+  pgdata:
+  uploads:

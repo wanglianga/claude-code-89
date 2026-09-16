@@ -1,0 +1,65 @@
+:root {
+  --brand: #2f8f6b;
+  --brand-dark: #237053;
+  --brand-light: #e8f5ef;
+}
+
+html, body, #app {
+  margin: 0;
+  height: 100%;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  background: #f4f6f8;
+  color: #243044;
+}
+
+a { color: var(--brand); text-decoration: none; }
+
+.page-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+.page-sub {
+  color: #7a869a;
+  font-size: 13px;
+  margin-bottom: 18px;
+}
+.section-card { margin-bottom: 18px; }
+
+.stat-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 4px rgba(20, 60, 40, 0.06);
+}
+.stat-card .num {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--brand);
+}
+.stat-card .label { color: #7a869a; font-size: 13px; margin-top: 4px; }
+
+.brand-gradient {
+  background: linear-gradient(120deg, #2f8f6b 0%, #47a084 60%, #6fbf95 100%);
+  color: #fff;
+}
+
+.el-menu--horizontal.brand-menu { border-bottom: none; background: transparent; }
+.brand-menu .el-menu-item { color: rgba(255,255,255,.85); }
+.brand-menu .el-menu-item.is-active { color: #fff; background: rgba(255,255,255,.15); border-radius: 8px; }
+.brand-menu .el-menu-item:hover { background: rgba(255,255,255,.1); }
+
+.photo-thumb {
+  width: 100%;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.privacy-tag {
+  background: #fef0f0;
+  color: #c45656;
+  border: 1px solid #fbc4c4;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
