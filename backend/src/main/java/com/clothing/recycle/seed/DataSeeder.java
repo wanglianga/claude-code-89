@@ -117,6 +117,10 @@ public class DataSeeder implements CommandLineRunner {
         String privacyC = photos.generate("privacy-c.jpg", 0x2A9D8F);
         String pM = photos.generate("pickup-m.jpg", 0xB5657D);
         String pN = photos.generate("pickup-n.jpg", 0x7D8CA6);
+        String pQ = photos.generate("pickup-q.jpg", 0x8D99AE);
+        String rejectK = photos.generate("reject-k.jpg", 0xE07A5F);
+        String resortK = photos.generate("resort-k.jpg", 0x2A9D8F);
+        String rejectQ = photos.generate("reject-q.jpg", 0xC45656);
         String donate1 = photos.generate("donation-b1.jpg", 0xE07A5F);
         String donate2 = photos.generate("donation-b2.jpg", 0xF2A541);
         String recycle1 = photos.generate("recycle-b3.jpg", 0x3D5A80);
@@ -278,7 +282,7 @@ public class DataSeeder implements CommandLineRunner {
                 "工作服反光条材质不可再生", "隐私衣物不进入公益流转", true, "REJECTED",
                 "工作服绣有姓名且夹带员工信息牌，依隐私保护规定单独拒收并登记销毁"), null);
 
-        // K：发运后被公益机构拒收 → 退回重新集货
+        // K：发运后被公益机构拒收（尺码不匹配，留拒收证据）→ 分拣中心重新分拣 → 改配其他机构签收
         RecycleOrder k = svc.createOrder(resident3, orderDto("阳光花园小区", 6, "童装,上衣",
                 true, false, "阳光花园 12 栋 1803", "2026-09-14 09:00-11:00", true, null));
         svc.assignOrder(k.getId(), collector1);
@@ -292,7 +296,76 @@ public class DataSeeder implements CommandLineRunner {
                 "organizationId", org2.getId().toString(),
                 "projectName", "秋季童装包"));
         svc.shipBatch(b4.getId());
-        svc.rejectBatch(b4.getId(), org2, "本季已募足童装，且其中 2 件尺码与受助年龄不匹配，整批退回");
+        // 机构拒收：类型=尺码不匹配，原因+复核照片
+        svc.rejectBatch(b4.getId(), org2, RejectReasonType.SIZE_MISMATCH,
+                "本季已募足童装，且抽检 2 件尺码偏小、与在库受助儿童年龄不匹配，按机构验收标准整批退回，附现场复核照片",
+                rejectK);
+        // 分拣中心重新分拣：仍可捐赠，重新打包后改配暖阳公益低年级项目（重量差异 -0.02kg 为重新打包损耗）
+        svc.resortBatch(b4.getId(), sorter1, Map.of(
+                "resortSummary", "重新整理后改配公益机构",
+                "resortReason", "衣物本身完好，仅尺码与原机构受助对象不匹配；重新分拣后改配暖阳公益低年级冬季项目",
+                "entries", List.of(Map.of(
+                        "orderId", k.getId(),
+                        "newCategory", "DIRECT_DONATE",
+                        "weightKg", new BigDecimal("1.76"),
+                        "outcome", "REDONATE",
+                        "reason", "尺码偏小，改配低年级受助儿童；重新打包减重 0.02kg",
+                        "destination", "暖阳公益-低年级冬季衣物包"))
+        ), resortK);
+        // 再分配批次（关联来源拒收批）→ 发运 → 新机构签收
+        Batch b5 = svc.createBatch(sorter1, Map.of(
+                "batchType", "DONATION",
+                "orderIds", List.of(k.getId()),
+                "organizationId", org1.getId().toString(),
+                "projectName", "暖阳低年级冬季衣物包",
+                "sourceBatchId", b4.getId().toString(),
+                "publicNote", "本批为童心助学尺码拒收后的改配批次，衣物经重新分拣复检合格"));
+        svc.shipBatch(b5.getId());
+        svc.signBatch(b5.getId(), org1, Map.of(
+                "receiverName", "林主任",
+                "signNote", "改配衣物尺码与低年级儿童匹配，复检合格，已入库"), sign2);
+
+        // Q：捐赠批因卫生标准被拒收 → 重新分拣转环保再生（说明原因、处理机构、重量变化）
+        RecycleOrder q = svc.createOrder(resident1, orderDto("阳光花园小区", 13, "上衣,外套",
+                false, false, "阳光花园 3 栋 502", "2026-09-14 14:00-16:00", true, null));
+        svc.assignOrder(q.getId(), collector1);
+        svc.recordPickup(q.getId(), collector1, pickup(new BigDecimal("3.20"), "需消毒整理", false,
+                "居民自存时间较长，略有潮气"), pQ);
+        svc.residentConfirm(q.getId(), resident1, "DONATION");
+        svc.sortReview(q.getId(), sorter1, sort("NEED_CLEAN", new BigDecimal("3.15"),
+                "轻微潮气，计划消毒后捐赠", "原计划暖阳公益", false, null, null), null);
+        Batch b6 = svc.createBatch(sorter1, Map.of(
+                "batchType", "DONATION",
+                "orderIds", List.of(q.getId()),
+                "organizationId", org1.getId().toString(),
+                "projectName", "社区秋衣补充包"));
+        svc.shipBatch(b6.getId());
+        svc.rejectBatch(b6.getId(), org1, RejectReasonType.HYGIENE,
+                "开箱复检发现部分衣物消毒后仍有轻微霉味，未达机构入库卫生标准，为保障受赠人健康整批拒收，附复核照片",
+                rejectQ);
+        svc.resortBatch(b6.getId(), sorter1, Map.of(
+                "resortSummary", "不达捐赠卫生标准，转环保再生",
+                "resortReason", "高温消毒后抽检仍有 2 件存在霉味，按卫生标准不再用于公益捐赠，整批转环保再生纤维化；剔除污损件后重量减少 0.15kg",
+                "entries", List.of(Map.of(
+                        "orderId", q.getId(),
+                        "newCategory", "ECO_RECYCLE",
+                        "weightKg", new BigDecimal("3.00"),
+                        "outcome", "TO_RECYCLE",
+                        "reason", "卫生复检不达标，转开松纤维化再生；3.15kg→3.00kg，差异 -0.15kg 为剔除污损件"))
+        ), rejectQ);
+        Batch b7 = svc.createBatch(sorter1, Map.of(
+                "batchType", "RECYCLE",
+                "orderIds", List.of(q.getId()),
+                "recyclerName", "绿纤环保再生资源厂",
+                "sourceBatchId", b6.getId().toString(),
+                "publicNote", "替代去向说明：本批原为捐赠衣物，因公益机构卫生复检不达标被拒收；经分拣中心重新分拣后转绿纤环保再生资源厂开松纤维化处理，重量 3.15kg→3.00kg（剔除 0.15kg 污损件），并非捐赠失败，衣物仍得到环保利用"));
+        svc.shipBatch(b7.getId());
+        svc.recycleBatch(b7.getId(), Map.of(
+                "recycledWeightKg", new BigDecimal("2.95"),
+                "publicNote", "2.95kg 完成开松纤维化，产物为保温棉原料，处置证明编号 RF-20260915-11"));
+
+        // 居民（李晓梅）对其捐赠单要求公示隐藏个人信息：公示端仅展示批次与去向
+        svc.setPublicHidden(a.getId(), resident1, true);
 
         // M / N：已分拣待入批
         RecycleOrder m = svc.createOrder(resident1, orderDto("阳光花园小区", 14, "裤装,上衣",

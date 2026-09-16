@@ -157,7 +157,8 @@ public class StatsController {
             row.put("partnerName", b.getPartner() == null ? null : b.getPartner().getName());
             row.put("totalWeightKg", b.getTotalWeightKg());
             row.put("recycledWeightKg", b.getRecycledWeightKg());
-            row.put("orderCount", b.getOrders().size());
+            row.put("orderCount", b.getStatus() == BatchStatus.REJECTED
+                    ? b.getOriginalOrders().size() : b.getOrders().size());
             row.put("status", b.getStatus().name());
             row.put("rejectReason", b.getRejectReason());
             out.add(row);

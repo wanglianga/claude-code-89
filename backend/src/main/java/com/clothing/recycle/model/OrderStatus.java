@@ -6,6 +6,7 @@ public enum OrderStatus {
     ASSIGNED,     // 已派单，等待上门
     PICKED_UP,    // 已上门回收，待分拣复核
     SORTED,       // 分拣复核完成，待入批
+    RETURNED,     // 公益机构拒收退回，待重新分拣
     IN_TRANSIT,   // 已随批次发运
     DONATED,      // 已公益捐赠签收
     RECYCLED,     // 已环保再生处理

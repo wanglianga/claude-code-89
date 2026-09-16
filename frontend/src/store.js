@@ -40,6 +40,7 @@ export const ORDER_STATUS = {
   ASSIGNED: { label: '待上门', type: 'warning' },
   PICKED_UP: { label: '待分拣复核', type: 'primary' },
   SORTED: { label: '已分拣待入批', type: 'primary' },
+  RETURNED: { label: '机构拒收待重分', type: 'danger' },
   IN_TRANSIT: { label: '运输在途', type: 'warning' },
   DONATED: { label: '已捐赠签收', type: 'success' },
   RECYCLED: { label: '已环保再生', type: 'success' },
@@ -78,4 +79,17 @@ export const BATCH_STATUS = {
   RECYCLED: { label: '再生完成', type: 'success' },
   REJECTED: { label: '机构拒收', type: 'danger' },
   AID_GIVEN: { label: '已定向发放', type: 'success' }
+}
+
+export const REJECT_REASON = {
+  SIZE_MISMATCH: '尺码不匹配',
+  SEASON_MISMATCH: '季节不匹配',
+  HYGIENE: '卫生标准不匹配',
+  OTHER: '其他原因'
+}
+
+export const RESORT_OUTCOME = {
+  REDONATE: { label: '改配公益', type: 'success' },
+  TO_RECYCLE: { label: '转环保再生', type: 'primary' },
+  FINAL_REJECT: { label: '无害化处理', type: 'danger' }
 }

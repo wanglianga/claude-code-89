@@ -81,6 +81,9 @@
           </el-select>
         </el-form-item>
         <el-form-item label="希望捐赠"><el-switch v-model="form.donateWanted" active-text="希望公益捐赠" inactive-text="倾向积分" /></el-form-item>
+        <el-form-item label="公示隐私">
+          <el-switch v-model="form.publicHidden" active-text="公示时隐藏我的单号与小区，只展示批次和去向" />
+        </el-form-item>
         <el-form-item label="公益活动">
           <el-select v-model="form.partnerId" clearable placeholder="不参加活动（可选）" style="width:100%">
             <el-option v-for="p in partners" :key="p.id" :label="`${p.type==='SCHOOL'?'学校':'企业'} · ${p.name} · ${p.projectName}`" :value="p.id" />
@@ -268,13 +271,39 @@
         </div>
         <el-empty v-else description="等待分拣中心复核" :image-size="60" />
 
-        <el-divider content-position="left">批次去向 / 关联投诉</el-divider>
+        <el-divider content-position="left">批次去向 / 拒收再分配</el-divider>
         <div v-if="current.batch">
-          批次 <b>{{ current.batch.code }}</b> · {{ current.batch.projectName || current.batch.recyclerName }}
-          · <el-tag size="small" :type="BATCH_STATUS[current.batch.status].type">{{ BATCH_STATUS[current.batch.status].label }}</el-tag>
+          <div>首次入批 <b>{{ current.batch.code }}</b> · {{ current.batch.projectName || current.batch.recyclerName }}
+            · <el-tag size="small" :type="BATCH_STATUS[current.batch.status].type">{{ BATCH_STATUS[current.batch.status].label }}</el-tag>
+          </div>
+          <div v-if="current.batch.rejectReason" class="reject-mini">
+            ⛔ {{ current.batch.rejectReasonTypeLabel }}拒收：{{ current.batch.rejectReason }}
+          </div>
+          <div v-if="current.batch.resortAt" class="resort-mini">
+            🔄 {{ current.batch.resortSummary }}（可继续处置 {{ current.batch.resortWeightKg }}kg）
+            <div class="muted">{{ current.batch.resortReason }}</div>
+          </div>
+          <div v-for="c in current.batch.redistributions" :key="c.id" class="chain-mini">
+            ➡️ {{ c.batchType==='RECYCLE' ? '转环保再生' : '改配公益' }}：{{ c.code }} ·
+            {{ c.projectName || c.recyclerName }} · {{ BATCH_STATUS[c.status].label }}
+            <span v-if="c.recycledWeightKg!=null"> · 再生 {{ c.recycledWeightKg }}kg</span>
+          </div>
         </div>
         <div v-else class="muted">尚未集货入批</div>
-        <div v-if="current.complaints?.length" style="margin-top:8px">
+        <div v-if="current.currentBatch" class="current-batch">
+          ✅ 当前最终去向：<b>{{ current.currentBatch.code }}</b> ·
+          {{ current.currentBatch.projectName || current.currentBatch.recyclerName }} ·
+          {{ BATCH_STATUS[current.currentBatch.status].label }}
+        </div>
+        <el-divider content-position="left">公示隐私</el-divider>
+        <div v-if="role==='RESIDENT' && current.resident?.username===auth.user.username" class="privacy-switch">
+          <el-switch :model-value="current.publicHidden" @change="toggleHidden"
+                     active-text="公示端隐藏我的单号/小区，仅展示批次与去向" />
+        </div>
+        <div v-else class="muted">
+          {{ current.publicHidden ? '该居民要求公示匿名：公示端仅展示批次与去向' : '该居民允许公示单号与小区溯源' }}
+        </div>
+        <div v-if="current.complaints?.length" style="margin-top:10px">
           <el-tag v-for="c in current.complaints" :key="c.id" type="warning" style="margin-right:6px">
             投诉#{{ c.id }} {{ COMPLAINT_TYPE[c.type] }} · {{ COMPLAINT_STATUS[c.status].label }}
           </el-tag>
@@ -323,7 +352,7 @@ const createDlg = ref(false)
 const form = ref({})
 function emptyForm() {
   return { itemCount: 5, catArr: ['上衣'], washed: true, hasShoesBagsBedding: false,
-    address: '', timeSlot: '', donateWanted: true, partnerId: null }
+    address: '', timeSlot: '', donateWanted: true, partnerId: null, publicHidden: false }
 }
 function openCreate() { form.value = emptyForm(); createDlg.value = true }
 async function submitCreate() {
@@ -468,6 +497,12 @@ async function openDetail(row) {
   current.value = await api.get(`/api/orders/${row.id}`)
   detailDlg.value = true
 }
+async function toggleHidden(val) {
+  const o = await api.post(`/api/orders/${current.value.id}/public-hidden`, { hidden: val })
+  current.value.publicHidden = o.publicHidden
+  ElMessage.success(val ? '已设置公示匿名：仅展示批次与去向' : '已允许公示单号与小区')
+  load()
+}
 </script>
 
 <style scoped>
@@ -475,4 +510,9 @@ async function openDetail(row) {
 .muted { color: #97a0af; font-size: 12px; }
 .confirm-opts { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
 .confirm-opts :deep(.el-radio) { margin: 0; padding: 10px 14px; height: auto; white-space: normal; }
+.reject-mini { background:#fef0f0; color:#c45656; border-radius:6px; padding:6px 8px; font-size:12px; margin-top:6px; }
+.resort-mini { background:#fdf6ec; color:#b88230; border-radius:6px; padding:6px 8px; font-size:12px; margin-top:6px; }
+.chain-mini { font-size:12px; color:#2f8f6b; margin-top:6px; }
+.current-batch { margin-top:8px; font-size:13px; color:#2f8f6b; }
+.privacy-switch { font-size: 13px; }
 </style>

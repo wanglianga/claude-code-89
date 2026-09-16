@@ -30,11 +30,13 @@ public class RecycleService {
     private final AidFamilyRepo aidRepo;
     private final ProductRepo productRepo;
     private final ExchangeRepo exchangeRepo;
+    private final ResortRecordRepo resortRecordRepo;
 
     public RecycleService(UserRepo userRepo, OrderRepo orderRepo, PickupRepo pickupRepo,
                           SortReviewRepo sortRepo, BatchRepo batchRepo, ComplaintRepo complaintRepo,
                           PointsLedgerRepo ledgerRepo, PartnerRepo partnerRepo, AidFamilyRepo aidRepo,
-                          ProductRepo productRepo, ExchangeRepo exchangeRepo) {
+                          ProductRepo productRepo, ExchangeRepo exchangeRepo,
+                          ResortRecordRepo resortRecordRepo) {
         this.userRepo = userRepo;
         this.orderRepo = orderRepo;
         this.pickupRepo = pickupRepo;
@@ -46,6 +48,7 @@ public class RecycleService {
         this.aidRepo = aidRepo;
         this.productRepo = productRepo;
         this.exchangeRepo = exchangeRepo;
+        this.resortRecordRepo = resortRecordRepo;
     }
 
     private static BigDecimal bd(Object v) {
@@ -126,6 +129,7 @@ public class RecycleService {
         if (pid != null && !pid.toString().isBlank()) {
             partnerRepo.findById(Long.parseLong(pid.toString())).ifPresent(o::setPartner);
         }
+        o.setPublicHidden(bool(dto.get("publicHidden")));
         RecycleOrder saved = orderRepo.save(o);
         saved.setCode("RO2026" + String.format("%05d", saved.getId()));
         return orderRepo.save(saved);
@@ -311,6 +315,7 @@ public class RecycleService {
         String batchType = str(dto.get("batchType")); // DONATION / RECYCLE
         List<Long> ids = parseIds(dto.get("orderIds"));
         if (ids.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请选择入批回收单");
+        Object srcId = dto.get("sourceBatchId");
 
         // ---- 先校验全部回收单（任一项不满足则整体失败，不落空批次、不改状态） ----
         List<RecycleOrder> toAdd = new ArrayList<>();
@@ -319,13 +324,18 @@ public class RecycleService {
         int items = 0;
         for (Long id : ids) {
             RecycleOrder o = mustOrder(id);
-            if (o.getStatus() != OrderStatus.SORTED || o.getBatch() != null) {
+            if (o.getStatus() != OrderStatus.SORTED || o.getCurrentBatch() != null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "回收单 " + o.getCode() + " 未处于可入批状态");
             }
             SortReview r = sortRepo.findByOrder(o)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             o.getCode() + " 缺少分拣复核记录"));
+            if (srcId != null && (o.getBatch() == null
+                    || !o.getBatch().getId().equals(Long.parseLong(srcId.toString())))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        o.getCode() + " 不属于所选拒收来源批次");
+            }
             if (r.getPrivacyAction() == PrivacyAction.REJECTED) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         o.getCode() + " 为隐私拒收单，依法不得进入公益流转批次");
@@ -368,11 +378,20 @@ public class RecycleService {
             partner = partnerRepo.findById(Long.parseLong(pid.toString())).orElse(null);
             b.setPartner(partner);
         }
+        if (srcId != null && !srcId.toString().isBlank()) {
+            Batch src = mustBatch(Long.parseLong(srcId.toString()));
+            if (src.getStatus() != BatchStatus.REJECTED || src.getResortAt() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "来源批次未完成拒收后重新分拣，不能作为再分配来源");
+            }
+            b.setSourceBatch(src);
+        }
         b = batchRepo.save(b);
 
         for (int i = 0; i < toAdd.size(); i++) {
             RecycleOrder o = toAdd.get(i);
-            o.setBatch(b);
+            if (o.getBatch() == null) o.setBatch(b); // 首次入批：记录不可变来源
+            o.setCurrentBatch(b);                    // 当前归属指向再分配批次
             orderRepo.save(o);
         }
         b.setTotalWeightKg(total);
@@ -420,20 +439,104 @@ public class RecycleService {
         return batchRepo.save(b);
     }
 
-    /** 公益机构拒收：批次退回，回收单回到分拣环节重新安排去向 */
+    /** 公益机构拒收：记录拒收类型/原因/复核照片，批次保留为可追溯证据，
+     *  回收单退回为 RETURNED 待重新分拣（保留与拒收批次的关联，不抹除流向）。 */
     @Transactional
-    public Batch rejectBatch(Long batchId, User orgUser, String reason) {
+    public Batch rejectBatch(Long batchId, User orgUser, RejectReasonType reasonType,
+                             String reason, String rejectPhoto) {
         Batch b = mustBatch(batchId);
         if (b.getStatus() != BatchStatus.IN_TRANSIT && b.getStatus() != BatchStatus.STAGED) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前批次状态不可拒收");
         }
+        if (reasonType == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "拒收失败：请选择拒收原因类型（尺码/季节/卫生/其他）");
+        }
+        if (reason == null || reason.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "拒收失败：必须填写拒收原因说明");
+        }
+        if (rejectPhoto == null || rejectPhoto.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "拒收失败：请上传现场复核照片作为拒收证据");
+        }
         b.setStatus(BatchStatus.REJECTED);
+        b.setRejectReasonType(reasonType);
         b.setRejectReason(reason);
+        b.setRejectPhotoPath(rejectPhoto);
         for (RecycleOrder o : b.getOrders()) {
-            o.setBatch(null);
-            o.setStatus(OrderStatus.SORTED);
+            o.setStatus(OrderStatus.RETURNED);
             orderRepo.save(o);
         }
+        return batchRepo.save(b);
+    }    /** 拒收退回后分拣中心重新分拣：逐单记录新分类/重量变化/结论/原因与复核照片；
+     *  REDONATE/TO_RECYCLE 退回可入批池，FINAL_REJECT 终止。重量变化汇总到拒收批次。 */
+    @Transactional
+    @SuppressWarnings("unchecked")
+    public Batch resortBatch(Long batchId, User sorter, Map<String, Object> dto, String resortPhoto) {
+        Batch b = mustBatch(batchId);
+        if (b.getStatus() != BatchStatus.REJECTED) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "仅被拒收批次可重新分拣");
+        }
+        List<Map<String, Object>> entries = (List<Map<String, Object>>) dto.getOrDefault("entries", List.of());
+        if (entries.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请逐单提交重新分拣结果");
+        }
+        BigDecimal resortWeight = BigDecimal.ZERO;
+        for (Map<String, Object> e : entries) {
+            Long oid = Long.parseLong(e.get("orderId").toString());
+            RecycleOrder o = mustOrder(oid);
+            if (o.getCurrentBatch() == null || !o.getCurrentBatch().getId().equals(b.getId())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "回收单 " + o.getCode() + " 不属于该拒收批次");
+            }
+            BigDecimal w = bd(e.get("weightKg"));
+            if (w == null || w.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "回收单 " + o.getCode() + " 重新分拣重量无效");
+            }
+            SortCategory newCat = SortCategory.valueOf(str(e.get("newCategory")));
+            ResortOutcome outcome = ResortOutcome.valueOf(str(e.get("outcome")));
+            if (outcome == ResortOutcome.TO_RECYCLE && newCat != SortCategory.ECO_RECYCLE) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        o.getCode() + " 转环保再生时新分类必须为环保再生");
+            }
+            String perReason = str(e.get("reason"));
+
+            ResortRecord rr = new ResortRecord();
+            rr.setRejectedBatch(b);
+            rr.setOrder(o);
+            rr.setSorter(sorter);
+            rr.setNewCategory(newCat);
+            rr.setWeightKg(w);
+            SortReview old = sortRepo.findByOrder(o).orElseThrow();
+            rr.setWeightDiff(w.subtract(old.getWeightKg()));
+            rr.setReason(perReason);
+            rr.setPhotoPath(str(e.get("photoPath")));
+            rr.setOutcome(outcome);
+            resortRecordRepo.save(rr);
+
+            // 更新最新分拣结论（原始结论保留在拒收批次与 ResortRecord 中）
+            old.setCategory(newCat);
+            old.setWeightKg(w);
+            old.setWeightDiff(w.subtract(o.getPickupWeight() == null ? w : o.getPickupWeight()));
+            if (perReason != null) old.setDamageReason(perReason);
+            old.setDestination(str(e.getOrDefault("destination", old.getDestination())));
+            sortRepo.save(old);
+
+            if (outcome == ResortOutcome.FINAL_REJECT) {
+                o.setStatus(OrderStatus.REJECTED);
+            } else {
+                o.setStatus(OrderStatus.SORTED);
+                o.setCurrentBatch(null); // 释放回可入批池，来源批次 batch 字段保留
+                resortWeight = resortWeight.add(w);
+            }
+            o.setSortedAt(LocalDateTime.now());
+            orderRepo.save(o);
+        }
+        b.setResortSummary(str(dto.get("resortSummary")));
+        b.setResortReason(str(dto.get("resortReason")));
+        b.setResortWeightKg(resortWeight);
+        b.setResortPhotoPath(resortPhoto);
+        b.setResortSorter(sorter);
+        b.setResortAt(LocalDateTime.now());
         return batchRepo.save(b);
     }
 
@@ -446,7 +549,12 @@ public class RecycleService {
         b.setStatus(BatchStatus.RECYCLED);
         BigDecimal recycled = bd(dto.get("recycledWeightKg"));
         b.setRecycledWeightKg(recycled != null ? recycled : b.getTotalWeightKg());
-        b.setPublicNote(str(dto.getOrDefault("publicNote", b.getPublicNote())));
+        String extra = str(dto.get("publicNote"));
+        if (extra != null && !extra.isBlank()) {
+            // 保留建批时的替代去向说明（拒收原因/处理机构/重量变化），追加再生处理结果
+            b.setPublicNote(b.getPublicNote() == null || b.getPublicNote().isBlank()
+                    ? extra : b.getPublicNote() + "；" + extra);
+        }
         b.setRecycledAt(LocalDateTime.now());
         for (RecycleOrder o : b.getOrders()) {
             o.setStatus(OrderStatus.RECYCLED);
@@ -609,6 +717,18 @@ public class RecycleService {
         }
         return addLedger(resident, null, PointsType.ADJUST, points,
                 "财务调整：" + (remark == null ? "" : remark));
+    }
+
+    // ===================== 居民公示隐私设置 =====================
+
+    @Transactional
+    public RecycleOrder setPublicHidden(Long orderId, User resident, boolean hidden) {
+        RecycleOrder o = mustOrder(orderId);
+        if (!o.getResident().getId().equals(resident.getId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "仅本人可设置公示隐私");
+        }
+        o.setPublicHidden(hidden);
+        return orderRepo.save(o);
     }
 
     // ===================== 工具 =====================

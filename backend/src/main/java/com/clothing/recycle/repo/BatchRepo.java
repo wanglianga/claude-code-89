@@ -10,4 +10,5 @@ public interface BatchRepo extends JpaRepository<Batch, Long> {
     List<Batch> findByStatusNotOrderByCreatedAtDesc(BatchStatus status);
     List<Batch> findAllByOrderByCreatedAtDesc();
     List<Batch> findByStatusOrderByCreatedAtDesc(BatchStatus status);
+    List<Batch> findBySourceBatchOrderByCreatedAtAsc(Batch source);
 }

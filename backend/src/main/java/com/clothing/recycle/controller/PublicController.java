@@ -39,11 +39,11 @@ public class PublicController {
         return Map.of("status", "UP");
     }
 
-    /** 已进入公开环节的批次（集货中不对外公示） */
+    /** 已进入公开环节的批次（集货中不对外公示）；要求隐藏信息的住户仅以匿名条目出现 */
     @GetMapping("/batches")
     public List<Map<String, Object>> batches() {
         return batchRepo.findByStatusNotOrderByCreatedAtDesc(BatchStatus.STAGED).stream()
-                .map(vm::batch).toList();
+                .map(b -> vm.batch(b, true)).toList();
     }
 
     /** 公示大盘数据 */

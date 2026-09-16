@@ -65,9 +65,41 @@ public class Batch {
     @Column(length = 500)
     private String signNote;
 
+    /** 拒收原因类型（尺码/季节/卫生/其他） */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private RejectReasonType rejectReasonType;
+
     /** 拒收原因（公益机构拒收时） */
     @Column(length = 500)
     private String rejectReason;
+
+    /** 拒收现场复核照片 */
+    private String rejectPhotoPath;
+
+    /** 本批由哪个拒收批次再分配而来（拒收→再分配流向链） */
+    @ManyToOne(fetch = FetchType.LAZY)
+    private Batch sourceBatch;
+
+    // ---------- 拒收退回后的重新分拣汇总 ----------
+    /** 总体结论描述，如 改配公益 / 转环保再生 / 混合处置 */
+    @Column(length = 120)
+    private String resortSummary;
+
+    @Column(length = 500)
+    private String resortReason;
+
+    /** 重新分拣后可继续处置的总重量（拒收时重量为 totalWeightKg） */
+    @Column(precision = 10, scale = 2)
+    private BigDecimal resortWeightKg;
+
+    /** 重新分拣复核照片 */
+    private String resortPhotoPath;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    private User resortSorter;
+
+    private LocalDateTime resortAt;
 
     /** 再生处理量（kg） */
     @Column(precision = 10, scale = 2)
@@ -84,6 +116,11 @@ public class Batch {
 
     private LocalDateTime createdAt = LocalDateTime.now();
 
-    @OneToMany(mappedBy = "batch")
+    /** 当前批次构成（拒收再分配后，新单挂到新批） */
+    @OneToMany(mappedBy = "currentBatch")
     private List<RecycleOrder> orders = new ArrayList<>();
+
+    /** 原始批次构成（本批首次集货时的回收单，拒收后保留历史） */
+    @OneToMany(mappedBy = "batch")
+    private List<RecycleOrder> originalOrders = new ArrayList<>();
 }

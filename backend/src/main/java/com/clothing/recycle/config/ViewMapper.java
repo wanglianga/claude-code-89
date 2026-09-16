@@ -18,13 +18,18 @@ public class ViewMapper {
     private final SortReviewRepo sortRepo;
     private final ComplaintRepo complaintRepo;
     private final PointsLedgerRepo ledgerRepo;
+    private final BatchRepo batchRepo;
+    private final ResortRecordRepo resortRecordRepo;
 
     public ViewMapper(PickupRepo pickupRepo, SortReviewRepo sortRepo,
-                      ComplaintRepo complaintRepo, PointsLedgerRepo ledgerRepo) {
+                      ComplaintRepo complaintRepo, PointsLedgerRepo ledgerRepo,
+                      BatchRepo batchRepo, ResortRecordRepo resortRecordRepo) {
         this.pickupRepo = pickupRepo;
         this.sortRepo = sortRepo;
         this.complaintRepo = complaintRepo;
         this.ledgerRepo = ledgerRepo;
+        this.batchRepo = batchRepo;
+        this.resortRecordRepo = resortRecordRepo;
     }
 
     public static String photoUrl(String path) {
@@ -79,6 +84,7 @@ public class ViewMapper {
         m.put("pickedAt", o.getPickedAt());
         m.put("sortedAt", o.getSortedAt());
         m.put("pickupWeight", o.getPickupWeight());
+        m.put("publicHidden", o.isPublicHidden());
         m.put("resident", o.getResident() == null ? null : user(o.getResident()));
         m.put("collector", o.getCollector() == null ? null : user(o.getCollector()));
         m.put("partner", o.getPartner() == null ? null : partner(o.getPartner()));
@@ -97,18 +103,54 @@ public class ViewMapper {
         });
         sortRepo.findByOrder(o).ifPresent(r -> m.put("sort", sort(r)));
         if (o.getBatch() != null) {
+            Batch ob = o.getBatch();
             Map<String, Object> bm = new LinkedHashMap<>();
-            bm.put("id", o.getBatch().getId());
-            bm.put("code", o.getBatch().getCode());
-            bm.put("batchType", o.getBatch().getBatchType());
-            bm.put("projectName", o.getBatch().getProjectName());
-            bm.put("recyclerName", o.getBatch().getRecyclerName());
-            bm.put("status", o.getBatch().getStatus().name());
-            bm.put("totalWeightKg", o.getBatch().getTotalWeightKg());
-            bm.put("signedAt", o.getBatch().getSignedAt());
-            bm.put("organizationName", o.getBatch().getOrganization() == null
-                    ? null : o.getBatch().getOrganization().getOrganizationName());
+            bm.put("id", ob.getId());
+            bm.put("code", ob.getCode());
+            bm.put("batchType", ob.getBatchType());
+            bm.put("projectName", ob.getProjectName());
+            bm.put("recyclerName", ob.getRecyclerName());
+            bm.put("status", ob.getStatus().name());
+            bm.put("totalWeightKg", ob.getTotalWeightKg());
+            bm.put("signedAt", ob.getSignedAt());
+            bm.put("rejectReasonTypeLabel", rejectTypeLabel(ob.getRejectReasonType()));
+            bm.put("rejectReason", ob.getRejectReason());
+            bm.put("rejectPhotoUrl", photoUrl(ob.getRejectPhotoPath()));
+            bm.put("resortSummary", ob.getResortSummary());
+            bm.put("resortReason", ob.getResortReason());
+            bm.put("resortWeightKg", ob.getResortWeightKg());
+            bm.put("resortPhotoUrl", photoUrl(ob.getResortPhotoPath()));
+            bm.put("redistributions", batchRepo.findBySourceBatchOrderByCreatedAtAsc(ob).stream()
+                    .map(cb -> {
+                        Map<String, Object> cm = new LinkedHashMap<>();
+                        cm.put("id", cb.getId());
+                        cm.put("code", cb.getCode());
+                        cm.put("batchType", cb.getBatchType());
+                        cm.put("status", cb.getStatus().name());
+                        cm.put("projectName", cb.getProjectName());
+                        cm.put("recyclerName", cb.getRecyclerName());
+                        cm.put("recycledWeightKg", cb.getRecycledWeightKg());
+                        cm.put("publicNote", cb.getPublicNote());
+                        return cm;
+                    }).toList());
+            bm.put("organizationName", ob.getOrganization() == null
+                    ? null : ob.getOrganization().getOrganizationName());
             m.put("batch", bm);
+
+            // 拒收再分配后：当前实际所在批次（最终去向）
+            if (o.getCurrentBatch() != null && (ob.getId() == null
+                    || !ob.getId().equals(o.getCurrentBatch().getId()))) {
+                Batch cb = o.getCurrentBatch();
+                Map<String, Object> cm = new LinkedHashMap<>();
+                cm.put("id", cb.getId());
+                cm.put("code", cb.getCode());
+                cm.put("batchType", cb.getBatchType());
+                cm.put("projectName", cb.getProjectName());
+                cm.put("recyclerName", cb.getRecyclerName());
+                cm.put("status", cb.getStatus().name());
+                cm.put("recycledWeightKg", cb.getRecycledWeightKg());
+                m.put("currentBatch", cm);
+            }
         }
         List<Map<String, Object>> cs = complaintRepo.findByOrderOrderByCreatedAtAsc(o).stream()
                 .map(c -> Map.<String, Object>of("id", c.getId(), "type", c.getType().name(),
@@ -162,6 +204,22 @@ public class ViewMapper {
 
     @Transactional(readOnly = true)
     public Map<String, Object> batch(Batch b) {
+        return batch(b, false);
+    }
+
+    /** 拒收类型中文标签 */
+    public static String rejectTypeLabel(RejectReasonType t) {
+        if (t == null) return null;
+        return switch (t) {
+            case SIZE_MISMATCH -> "尺码不匹配";
+            case SEASON_MISMATCH -> "季节不匹配";
+            case HYGIENE -> "卫生标准不匹配";
+            case OTHER -> "其他原因";
+        };
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> batch(Batch b, boolean publicView) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", b.getId());
         m.put("code", b.getCode());
@@ -176,6 +234,9 @@ public class ViewMapper {
         m.put("receiverName", b.getReceiverName());
         m.put("signNote", b.getSignNote());
         m.put("rejectReason", b.getRejectReason());
+        m.put("rejectReasonType", b.getRejectReasonType() == null ? null : b.getRejectReasonType().name());
+        m.put("rejectReasonTypeLabel", rejectTypeLabel(b.getRejectReasonType()));
+        m.put("rejectPhotoUrl", photoUrl(b.getRejectPhotoPath()));
         m.put("recycledWeightKg", b.getRecycledWeightKg());
         m.put("publicNote", b.getPublicNote());
         m.put("shippedAt", b.getShippedAt());
@@ -185,22 +246,86 @@ public class ViewMapper {
         m.put("createdAt", b.getCreatedAt());
         m.put("organization", b.getOrganization() == null ? null : user(b.getOrganization()));
         m.put("partner", b.getPartner() == null ? null : partner(b.getPartner()));
-        m.put("orderCount", b.getOrders().size());
-        List<Map<String, Object>> orders = b.getOrders().stream().map(o -> {
+        // 拒收批退回后当前构成已释放，展示其原始批次构成
+        List<RecycleOrder> memberOrders = b.getStatus() == BatchStatus.REJECTED
+                ? b.getOriginalOrders() : b.getOrders();
+        m.put("orderCount", memberOrders.size());
+
+        // 拒收→重新分拣 证据与结论
+        m.put("resortSummary", b.getResortSummary());
+        m.put("resortReason", b.getResortReason());
+        m.put("resortWeightKg", b.getResortWeightKg());
+        m.put("resortPhotoUrl", photoUrl(b.getResortPhotoPath()));
+        m.put("resortAt", b.getResortAt());
+        m.put("resortSorter", b.getResortSorter() == null ? null
+                : Map.of("id", b.getResortSorter().getId(), "displayName", b.getResortSorter().getDisplayName()));
+        List<Map<String, Object>> resortRecords = publicView ? List.of()
+                : resortRecordRepo.findByRejectedBatchOrderByCreatedAtAsc(b)
+                .stream().map(rr -> {
+                    Map<String, Object> rm = new LinkedHashMap<>();
+                    rm.put("orderId", rr.getOrder().getId());
+                    rm.put("orderCode", rr.getOrder().getCode());
+                    rm.put("newCategory", rr.getNewCategory().name());
+                    rm.put("weightKg", rr.getWeightKg());
+                    rm.put("weightDiff", rr.getWeightDiff());
+                    rm.put("reason", rr.getReason());
+                    rm.put("photoUrl", photoUrl(rr.getPhotoPath()));
+                    rm.put("outcome", rr.getOutcome().name());
+                    return rm;
+                }).toList();
+        m.put("resortRecords", resortRecords);
+
+        // 流向链：来源拒收批 / 再分配出的新批
+        if (b.getSourceBatch() != null) {
+            Map<String, Object> src = new LinkedHashMap<>();
+            src.put("id", b.getSourceBatch().getId());
+            src.put("code", b.getSourceBatch().getCode());
+            src.put("status", b.getSourceBatch().getStatus().name());
+            src.put("rejectReasonTypeLabel", rejectTypeLabel(b.getSourceBatch().getRejectReasonType()));
+            m.put("sourceBatch", src);
+        }
+        List<Map<String, Object>> children = batchRepo.findBySourceBatchOrderByCreatedAtAsc(b).stream()
+                .map(cb -> {
+                    Map<String, Object> cm = new LinkedHashMap<>();
+                    cm.put("id", cb.getId());
+                    cm.put("code", cb.getCode());
+                    cm.put("batchType", cb.getBatchType());
+                    cm.put("status", cb.getStatus().name());
+                    cm.put("projectName", cb.getProjectName());
+                    cm.put("recyclerName", cb.getRecyclerName());
+                    cm.put("totalWeightKg", cb.getTotalWeightKg());
+                    cm.put("recycledWeightKg", cb.getRecycledWeightKg());
+                    cm.put("publicNote", cb.getPublicNote());
+                    cm.put("signPhotoUrl", photoUrl(cb.getSignPhotoPath()));
+                    return cm;
+                }).toList();
+        m.put("redistributions", children);
+
+        int hiddenCount = 0;
+        List<Map<String, Object>> orders = memberOrders.stream().map(o -> {
             Map<String, Object> om = new LinkedHashMap<>();
             om.put("id", o.getId());
-            om.put("code", o.getCode());
-            om.put("communityName", o.getCommunityName());
             om.put("status", o.getStatus().name());
+            boolean hidden = o.isPublicHidden();
+            om.put("publicHidden", hidden);
+            if (hidden && publicView) {
+                // 居民要求隐藏：公示端只展示批次与去向，不给任何住户明细（含内部单号）
+                om.clear();
+                om.put("anonymous", true);
+                return om;
+            }
             sortRepo.findByOrder(o).ifPresent(r -> {
                 om.put("category", r.getCategory().name());
                 om.put("weightKg", r.getWeightKg());
-                // 公示溯源只暴露标准化隐私结论与脱敏证据照片，不含原始备注/个人标识
                 Map<String, Object> conclusion = privacyConclusion(r);
                 if (conclusion != null) om.put("privacy", conclusion);
             });
+            om.put("code", o.getCode());
+            om.put("communityName", o.getCommunityName());
             return om;
         }).toList();
+        for (var o : memberOrders) if (o.isPublicHidden()) hiddenCount++;
+        m.put("hiddenOrderCount", hiddenCount);
         m.put("orders", orders);
         return m;
     }

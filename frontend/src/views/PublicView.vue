@@ -108,24 +108,66 @@
               <el-descriptions-item v-if="b.status === 'AID_GIVEN'" label="定向发放">
                 已发放至经社区核实的低收入家庭（信息脱敏）
               </el-descriptions-item>
+              <el-descriptions-item v-if="b.sourceBatch" label="来源">
+                本批为拒收批次 {{ b.sourceBatch.code }}（{{ b.sourceBatch.rejectReasonTypeLabel }}）重新分拣后的替代去向
+              </el-descriptions-item>
               <el-descriptions-item v-if="b.rejectReason" label="拒收原因">
-                <span style="color:#c45656">{{ b.rejectReason }}</span>
+                <span style="color:#c45656">【{{ b.rejectReasonTypeLabel }}】{{ b.rejectReason }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item v-if="b.resortAt" label="重新分拣">
+                {{ b.resortSummary }}；可继续处置 {{ b.resortWeightKg }}kg（原批 {{ b.totalWeightKg }}kg）
+                <div v-if="b.resortReason" class="muted-dark">{{ b.resortReason }}</div>
               </el-descriptions-item>
               <el-descriptions-item v-if="b.publicNote" label="公示说明">{{ b.publicNote }}</el-descriptions-item>
             </el-descriptions>
 
+            <el-row :gutter="8" v-if="b.rejectPhotoUrl || b.resortPhotoUrl" class="evidence-row">
+              <el-col :span="12" v-if="b.rejectPhotoUrl">
+                <el-image :src="b.rejectPhotoUrl" fit="cover" class="ph">
+                  <template #placeholder><div class="ph-tip">拒收复核照片</div></template>
+                </el-image>
+                <div class="ph-cap">机构拒收复核照片</div>
+              </el-col>
+              <el-col :span="12" v-if="b.resortPhotoUrl">
+                <el-image :src="b.resortPhotoUrl" fit="cover" class="ph">
+                  <template #placeholder><div class="ph-tip">重新分拣照片</div></template>
+                </el-image>
+                <div class="ph-cap">分拣中心重新分拣照片</div>
+              </el-col>
+            </el-row>
+
+            <el-collapse v-if="b.status==='REJECTED'">
+              <el-collapse-item title="这批衣物后来去哪了？（拒收后完整流向）" :name="1">
+                <el-steps direction="vertical" :active="b.redistributions?.length ? 3 : (b.resortAt ? 2 : 1)" finish-status="success">
+                  <el-step title="机构验收未通过" :description="`${b.rejectReasonTypeLabel}：${b.rejectReason}`" />
+                  <el-step v-if="b.resortAt" :title="b.resortSummary" :description="b.resortReason" />
+                  <el-step v-for="c in b.redistributions" :key="c.id"
+                          :title="c.batchType==='RECYCLE' ? '转环保再生处理' : '改配其他公益项目'"
+                          :description="`${c.code} · ${c.projectName || c.recyclerName} · ${BATCH_STATUS[c.status]?.label}` + (c.recycledWeightKg!=null ? ` · 再生 ${c.recycledWeightKg}kg` : '')" />
+                </el-steps>
+                <div v-if="!b.redistributions?.length && !b.resortAt" class="muted">分拣中心正在重新分拣，后续去向将在此公示</div>
+              </el-collapse-item>
+            </el-collapse>
+
             <el-collapse>
-              <el-collapse-item :title="`本批 ${b.orders.length} 张回收单溯源`" :name="1">
-                <div v-for="o in b.orders" :key="o.id" class="trace">
-                  <el-link type="info" class="trace-code">{{ o.code }}</el-link>
-                  <el-tag size="small">{{ o.communityName }}</el-tag>
-                  <el-tag size="small" :type="SORT_CATEGORY[o.category]?.type" effect="plain">
-                    {{ SORT_CATEGORY[o.category]?.label }}
-                  </el-tag>
-                  <el-tag v-if="o.privacy" size="small" type="success" effect="dark">
-                    🔒 {{ o.privacy.label }}
-                  </el-tag>
-                  <span class="trace-w">{{ o.weightKg }}kg</span>
+              <el-collapse-item :title="`本批 ${b.orderCount} 张回收单溯源${b.hiddenOrderCount?`（${b.hiddenOrderCount} 位居民选择匿名）`:''}`" :name="1">
+                <el-alert v-if="b.hiddenOrderCount" type="info" :closable="false" class="anon-tip"
+                          title="部分居民要求隐藏个人信息，其衣物仅公示批次与去向，不展示单号与小区等住户明细。" />
+                <div v-for="(o, idx) in b.orders" :key="idx" class="trace">
+                  <template v-if="o.anonymous">
+                    <el-tag size="small" type="info" effect="plain">匿名住户</el-tag>
+                  </template>
+                  <template v-else>
+                    <el-link type="info" class="trace-code">{{ o.code }}</el-link>
+                    <el-tag size="small">{{ o.communityName }}</el-tag>
+                    <el-tag size="small" :type="SORT_CATEGORY[o.category]?.type" effect="plain">
+                      {{ SORT_CATEGORY[o.category]?.label }}
+                    </el-tag>
+                    <el-tag v-if="o.privacy" size="small" type="success" effect="dark">
+                      🔒 {{ o.privacy.label }}
+                    </el-tag>
+                  </template>
+                  <span class="trace-w">{{ o.weightKg ? o.weightKg + 'kg' : '' }}</span>
                 </div>
                 <div v-if="b.orders.some(o => o.privacy)" class="privacy-note">
                   🔒 含个人标识的校服/工作服已按隐私规范处置：脱敏件拆除标识并复检留证，拒收件未进入公益流转。
@@ -241,6 +283,9 @@ onMounted(async () => {
 .ph-tip { width: 100%; height: 150px; display:flex; align-items:center; justify-content:center; color:#97a0af; font-size:12px; }
 .ph-cap { font-size: 12px; color: #97a0af; text-align: center; margin: 4px 0 8px; }
 .bc-desc { margin-top: 8px; }
+.muted-dark { color: #7a869a; font-size: 12px; margin-top: 2px; }
+.evidence-row { margin-top: 8px; }
+.anon-tip { margin: 6px 0; }
 .trace { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
 .trace-code { font-weight: 600; }
 .trace-w { color: #64705a; margin-left: auto; }

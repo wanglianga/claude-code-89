@@ -70,9 +70,16 @@ public class RecycleOrder {
     private LocalDateTime pickedAt;
     private LocalDateTime sortedAt;
 
-    /** 所属公示批次（分拣复核完成后入批） */
+    /** 首次进入的批次（来源批次，拒收再分配后保留以追溯原始流向） */
     @ManyToOne(fetch = FetchType.LAZY)
     private Batch batch;
+
+    /** 当前所在批次（拒收重新分拣后可改指再分配批次；在可入批池时为空） */
+    @ManyToOne(fetch = FetchType.LAZY)
+    private Batch currentBatch;
+
+    /** 居民要求公示时隐藏个人信息：公示端仅展示批次与去向，不展示单号/小区等住户明细 */
+    private boolean publicHidden;
 
     /** 重量冗余字段，便于统计（来自上门称重） */
     private BigDecimal pickupWeight;

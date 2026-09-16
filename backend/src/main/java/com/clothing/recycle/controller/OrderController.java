@@ -126,6 +126,14 @@ public class OrderController {
         return vm.order(svc.mustOrder(id));
     }
 
+    /** 居民设置公示隐私：隐藏后公示端仅展示批次与去向，不展示住户明细 */
+    @PostMapping("/{id}/public-hidden")
+    public Map<String, Object> publicHidden(@PathVariable Long id, @RequestBody Map<String, Object> dto) {
+        cu.require(Role.RESIDENT);
+        boolean hidden = dto.get("hidden") != null && Boolean.parseBoolean(dto.get("hidden").toString());
+        return vm.order(svc.setPublicHidden(id, cu.get(), hidden));
+    }
+
     /** 分拣中心复核（multipart：字段 + 分拣照片 + 脱敏处理照片） */
     @PostMapping(value = "/{id}/sort", consumes = "multipart/form-data")
     public Map<String, Object> sort(@PathVariable Long id,
