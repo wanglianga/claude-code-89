@@ -114,6 +114,13 @@ public class Batch {
     @Column(length = 1000)
     private String publicNote;
 
+    /** 企业/学校指定捐赠对象（定向捐赠仍须完成消毒、分拣、签收） */
+    @Column(length = 120)
+    private String designatedTarget;
+
+    /** 已定向发放总件数（领取完成累加） */
+    private Integer aidGivenQuantity = 0;
+
     private LocalDateTime createdAt = LocalDateTime.now();
 
     /** 当前批次构成（拒收再分配后，新单挂到新批） */

@@ -368,6 +368,7 @@ public class RecycleService {
         b.setProjectName(str(dto.get("projectName")));
         b.setRecyclerName(str(dto.get("recyclerName")));
         b.setPublicNote(str(dto.get("publicNote")));
+        b.setDesignatedTarget(str(dto.get("designatedTarget")));
         Object orgId = dto.get("organizationId");
         if (orgId != null && !orgId.toString().isBlank()) {
             b.setOrganization(mustUser(Long.parseLong(orgId.toString())));

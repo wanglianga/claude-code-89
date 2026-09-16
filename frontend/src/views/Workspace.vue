@@ -47,7 +47,7 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, List, Box, ChatDotRound, GoldMedal, OfficeBuilding, DataAnalysis,
-  View, SwitchButton
+  View, SwitchButton, Connection
 } from '@element-plus/icons-vue'
 import { useAuth } from '../store'
 
@@ -62,7 +62,8 @@ const items = [
   { index: '/app/batches', icon: Box, title: '批次与去向', roles: ['SORTER', 'COMMUNITY', 'ORG', 'ADMIN'] },
   { index: '/app/complaints', icon: ChatDotRound, title: '投诉协同', roles: ALL },
   { index: '/app/points', icon: GoldMedal, title: '环保积分', roles: ['RESIDENT', 'FINANCE', 'ADMIN'] },
-  { index: '/app/partners', icon: OfficeBuilding, title: '合作与帮扶', roles: ['COMMUNITY', 'ORG', 'ADMIN'] },
+  { index: '/app/partners', icon: OfficeBuilding, title: '合作与活动', roles: ['COMMUNITY', 'ORG', 'ADMIN'] },
+  { index: '/app/aid', icon: Connection, title: '定向领取', roles: ['COMMUNITY', 'SORTER', 'ORG', 'FINANCE', 'ADMIN'] },
   { index: '/app/review', icon: DataAnalysis, title: '社区复盘', roles: ['COMMUNITY', 'FINANCE', 'ADMIN'] }
 ]
 const menus = computed(() => items.filter(m => m.roles.includes(auth.role)))

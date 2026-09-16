@@ -18,6 +18,7 @@
           <el-radio-button label="community">按小区</el-radio-button>
           <el-radio-button label="collector">按回收员</el-radio-button>
           <el-radio-button label="project">按公益项目</el-radio-button>
+          <el-radio-button label="aid">定向领取效果</el-radio-button>
           <el-radio-button label="complaint">按投诉类型</el-radio-button>
         </el-radio-group>
       </div>
@@ -58,6 +59,22 @@
             </template>
           </el-table-column>
           <el-table-column prop="rejectReason" label="拒收原因" min-width="180" show-overflow-tooltip />
+        </template>
+        <template v-if="dim==='aid'">
+          <el-table-column prop="batchCode" label="批次" width="120" />
+          <el-table-column prop="projectName" label="公益项目" min-width="170" />
+          <el-table-column prop="orgName" label="机构" width="150" />
+          <el-table-column prop="designatedTarget" label="指定对象" width="130" />
+          <el-table-column prop="familyCount" label="发放户数" width="90" />
+          <el-table-column prop="quantity" label="发放件数" width="90" />
+          <el-table-column prop="proxyCount" label="代领次数" width="90" />
+          <el-table-column prop="visitCount" label="回访数" width="80" />
+          <el-table-column label="平均满意度" width="110">
+            <template #default="{row}">{{ row.avgSatisfaction == null ? '待回访' : row.avgSatisfaction + ' 分' }}</template>
+          </el-table-column>
+          <el-table-column label="后续需求" min-width="180">
+            <template #default="{row}">{{ (row.followupNeeds || []).join('；') || '-' }}</template>
+          </el-table-column>
         </template>
         <template v-if="dim==='complaint'">
           <el-table-column prop="typeLabel" label="投诉类型" min-width="140" />
@@ -109,9 +126,10 @@ async function load() {
     community: '/api/stats/by-community',
     collector: '/api/stats/by-collector',
     project: '/api/stats/by-project',
+    aid: '/api/stats/by-aid',
     complaint: '/api/stats/by-complaint'
   }[dim.value]
-  rows.value = await api.get(url + (dim.value !== 'project' ? q : ''))
+  rows.value = await api.get(url + (dim.value !== 'project' && dim.value !== 'aid' ? q : ''))
   await nextTick()
   renderChart()
 }
@@ -157,6 +175,19 @@ function renderChart() {
       series: [
         { name: '总重量kg', type: 'bar', data: d.map(r => Number(r.totalWeightKg)), itemStyle: { color: '#2f8f6b' } },
         { name: '再生量kg', type: 'bar', data: d.map(r => Number(r.recycledWeightKg || 0)), itemStyle: { color: '#5b8ff9' } }
+      ]
+    }
+  } else if (dim.value === 'aid') {
+    option = {
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['发放件数', '回访数'], top: 0 },
+      grid: { top: 40, bottom: 60, left: 50, right: 20 },
+      xAxis: { type: 'category', data: d.map(r => r.projectName || r.batchCode),
+               axisLabel: { interval: 0, rotate: 18, fontSize: 10 } },
+      yAxis: { type: 'value' },
+      series: [
+        { name: '发放件数', type: 'bar', data: d.map(r => r.quantity), itemStyle: { color: '#2f8f6b' } },
+        { name: '回访数', type: 'bar', data: d.map(r => r.visitCount), itemStyle: { color: '#f0b350' } }
       ]
     }
   } else {

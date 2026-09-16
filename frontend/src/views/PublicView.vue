@@ -25,6 +25,30 @@
     </section>
 
     <div class="inner content">
+      <el-card class="section-card">
+        <template #header><b>低收入家庭定向发放公示（不展示任何个人明细）</b></template>
+        <el-table :data="aidSummary" size="small" empty-text="暂无定向发放记录">
+          <el-table-column prop="batchCode" label="批次编号" width="130" />
+          <el-table-column label="公益项目" min-width="170">
+            <template #default="{row}">
+              {{ row.projectName }}
+              <el-tag v-if="row.designatedTarget" size="small" type="warning">指定：{{ row.designatedTarget }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="organizationName" label="签收机构" width="150" />
+          <el-table-column prop="distributionCount" label="发放户数" width="90" />
+          <el-table-column prop="handedQuantity" label="发放件数" width="90" />
+          <el-table-column label="状态" min-width="220">
+            <template #default="{row}">
+              <el-tag size="small" type="success">{{ row.statusLabel }}</el-tag>
+              <el-image v-if="row.signPhotoUrl" :src="row.signPhotoUrl" class="sign-thumb"
+                        :preview-src-list="[row.signPhotoUrl]" fit="cover" />
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="muted-note">依领取人意愿与隐私规范，姓名、住址、联系方式、困难情况、领取人照片均不予公示；要求隐藏信息的家庭统一显示"定向发放完毕"和批次编号。</div>
+      </el-card>
+
       <el-row :gutter="16">
         <el-col :xs="24" :md="10">
           <el-card class="section-card">
@@ -196,6 +220,7 @@ import { BATCH_STATUS, SORT_CATEGORY } from '../store'
 
 const stats = ref({ categoryWeightKg: {} })
 const batches = ref([])
+const aidSummary = ref([])
 const filter = ref('ALL')
 const pieEl = ref()
 const location = window.location
@@ -237,12 +262,14 @@ function renderPie() {
 }
 
 onMounted(async () => {
-  const [s, b] = await Promise.all([
+  const [s, b, aid] = await Promise.all([
     api.get('/api/public/stats'),
-    api.get('/api/public/batches')
+    api.get('/api/public/batches'),
+    api.get('/api/public/aid-summary')
   ])
   stats.value = s
   batches.value = b
+  aidSummary.value = aid
   await nextTick()
   renderPie()
 })
@@ -292,5 +319,7 @@ onMounted(async () => {
 .privacy-note { background: #f0f7f4; border: 1px solid #cde7dc; color: #3a7a5f; border-radius: 8px;
   padding: 8px 10px; font-size: 12px; margin: 6px 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .privacy-ev { width: 54px; height: 40px; border-radius: 6px; cursor: zoom-in; }
+.sign-thumb { width: 42px; height: 30px; border-radius: 4px; margin-left: 8px; }
+.muted-note { color: #97a0af; font-size: 12px; margin-top: 10px; }
 .footer { text-align: center; color: #97a0af; font-size: 12px; padding: 30px 0; }
 </style>

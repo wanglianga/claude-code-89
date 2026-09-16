@@ -28,10 +28,13 @@ public class DataSeeder implements CommandLineRunner {
     private final RecycleService svc;
     private final PasswordEncoder encoder;
     private final PhotoGenerator photos;
+    private final com.clothing.recycle.service.AidService aidSvc;
+    private final AidDistributionRepo distRepo;
 
     public DataSeeder(UserRepo userRepo, ProductRepo productRepo, PartnerRepo partnerRepo,
                       BatchRepo batchRepo, PickupRepo pickupRepo, RecycleService svc,
-                      PasswordEncoder encoder, PhotoGenerator photos) {
+                      PasswordEncoder encoder, PhotoGenerator photos,
+                      com.clothing.recycle.service.AidService aidSvc, AidDistributionRepo distRepo) {
         this.userRepo = userRepo;
         this.productRepo = productRepo;
         this.partnerRepo = partnerRepo;
@@ -40,6 +43,8 @@ public class DataSeeder implements CommandLineRunner {
         this.svc = svc;
         this.encoder = encoder;
         this.photos = photos;
+        this.aidSvc = aidSvc;
+        this.distRepo = distRepo;
     }
 
     private void setDonationPhoto(Long batchId, String path) {
@@ -96,6 +101,44 @@ public class DataSeeder implements CommandLineRunner {
         m.put("privacyRisk", privacy);
         if (action != null) m.put("privacyAction", action);
         m.put("privacyNote", privacyNote);
+        return m;
+    }
+
+    private Map<String, Object> familyDto(String name, String phone, String community, String street,
+                                          String proof, String proofNote, int size, int needCount,
+                                          String genderAge, String sizes, String seasons, String clothTypes,
+                                          boolean acceptUsed, boolean bedding, String delivery,
+                                          boolean publicHidden, String designated, String needNote) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("maskedName", name);
+        m.put("maskedPhone", phone);
+        m.put("communityName", community);
+        m.put("subdistrict", street);
+        m.put("proofType", proof);
+        m.put("proofNote", proofNote);
+        m.put("familySize", size);
+        m.put("needCount", needCount);
+        m.put("genderAgeDesc", genderAge);
+        m.put("sizes", sizes);
+        m.put("seasons", seasons);
+        m.put("clothTypes", clothTypes);
+        m.put("acceptUsed", acceptUsed);
+        m.put("needShoesBagsBedding", bedding);
+        m.put("deliveryMethod", delivery);
+        m.put("publicHidden", publicHidden);
+        if (designated != null) m.put("designatedTarget", designated);
+        m.put("needNote", needNote);
+        return m;
+    }
+
+    private Map<String, Object> handoutDto(String relation, String proxyName, String proxyAuth,
+                                           int qty, String note) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("receiverRelation", relation);
+        if (proxyName != null) m.put("proxyName", proxyName);
+        if (proxyAuth != null) m.put("proxyAuthNote", proxyAuth);
+        m.put("actualQuantity", qty);
+        m.put("handNote", note);
         return m;
     }
 
@@ -209,14 +252,26 @@ public class DataSeeder implements CommandLineRunner {
         // 捐赠照片单独上传（分拣打包/装车留痕）
         setDonationPhoto(b1.getId(), donate1);
 
-        // 低收入家庭定向领取
-        AidFamily fam1 = svc.registerAid(community1, Map.of(
-                "maskedName", "张*",
-                "maskedPhone", "138****2103",
-                "communityName", "阳光花园小区",
-                "familySize", 4,
-                "needNote", "低保家庭，两名儿童冬季缺外套（社区已核实）"));
-        svc.deliverAid(fam1.getId(), b1.getId(), community1, "凭凭证 AID 发放冬装 6 件，家属签字确认");
+        // 低收入家庭定向领取（完整需求登记，脱敏存储）
+        AidFamily fam1 = aidSvc.register(community1, familyDto(
+                "张*", "138****2103", "阳光花园小区", "朝阳街道", "LOW_INCOME",
+                "低保证已核验，仅留存核验结论", 4, 4, "女36岁、男8岁、女6岁、男3岁",
+                "120,130,140,S", "秋冬", "羽绒服,秋衣,童鞋", true, true, "PICKUP",
+                false, null, "两名儿童冬季缺外套（社区已核实，明细不外公示）"));
+        // 分拣中心从已签收的可直接捐赠批匹配（本小区优先），生成领取任务
+        AidDistribution d1 = aidSvc.match(fam1.getId(), b1.getId(),
+                List.of(a.getId(), c.getId()), 8, sorter1);
+        // 领取时核验本人身份与签收照片
+        aidSvc.handout(d1.getId(), handoutDto("本人", null, null, 8,
+                "凭凭证本人到场领取，冬装 8 件，签收照片留档"), sign1, community1);
+        // 财务对该批次只记一次公益价值（即使来源单居民选择了积分）
+        aidSvc.recordValue(b1.getId(), new BigDecimal("320.00"), 8,
+                "冬装 8 件物资价值估算（每批一次，积分单不再重复计捐赠金额）", finance1);
+        // 社区回访：穿着情况、满意度、后续需求
+        aidSvc.visit(fam1.getId(), Map.of(
+                "wearingSituation", "两名儿童已穿着冬装上学，尺码合适",
+                "satisfaction", 5,
+                "followupNeed", "希望明年春天补充春装"), community1);
 
         // B：需消毒整理（含被褥、未清洗、上门迟到）→ 批次B2 签收
         RecycleOrder b = svc.createOrder(resident2, orderDto("幸福里小区", 12, "被褥,外套",
@@ -452,6 +507,42 @@ public class DataSeeder implements CommandLineRunner {
 
         // ---------- 财务对其他居民的历史调整（演示流水） ----------
         svc.financeAdjust(finance1, resident3.getId(), 20, "童心捐衣季社区好评奖励");
+
+        // ================= 定向领取：匿名代领家庭 + 指定对象 + 异常处置 =================
+        // 匿名家庭：从尺码拒收改配批 b5 领取，老人不便到场由社区代领（授权留痕），公示仅显示批次
+        AidFamily fam2 = aidSvc.register(community1, familyDto(
+                "李*", "137****6620", "阳光花园小区", "朝阳街道", "TEMP_RELIEF",
+                "临时救助材料已核验", 2, 1, "女72岁", "XL", "秋冬", "保暖外套",
+                false, false, "DELIVERY", true, null, "独居老人临时救助，要求公示完全匿名"));
+        AidDistribution d2 = aidSvc.match(fam2.getId(), b5.getId(), List.of(k.getId()), 1, sorter1);
+        aidSvc.handout(d2.getId(), handoutDto("社区工作人员代领", "社区工作人员小陈",
+                "登记人电话确认（通话已录音存档）+社区授权书 AUTH-0916-02", 1,
+                "配送上门，老人签收确认"), sign2, community1);
+        aidSvc.recordValue(b5.getId(), new BigDecimal("45.00"), 1,
+                "保暖外套 1 件（拒收改配批次，唯一记账）", finance1);
+        aidSvc.visit(fam2.getId(), Map.of(
+                "wearingSituation", "外套合身保暖", "satisfaction", 4, "followupNeed", "暂无"), community1);
+
+        // 企业指定捐赠对象：仍走完整分拣、签收，再定向匹配
+        AidFamily fam3 = aidSvc.register(community1, familyDto(
+                "王*", "136****1180", "阳光花园小区", "朝阳街道", "COMMUNITY_AUTH",
+                "社区授权名单（华远暖冬企业周指定对象）", 3, 3, "男34岁、女32岁、男6岁",
+                "M,S,110", "秋冬", "秋衣,外套", true, true, "PICKUP", false,
+                "华远地产暖冬企业周指定家庭", "企业定向帮扶家庭，按隐私规则公示但保留项目名"));
+        // fam3 已登记，暂未匹配（演示待匹配队列），不发放
+
+        // 一例已处置的领取异常：尺码不合 → 换货（异常挂同一回收单，不直改公示）
+        AidIssue issue1 = aidSvc.openIssue(d1.getId(), c.getId(), AidIssueType.SIZE_WRONG,
+                "初次领取的一件 130 码童装孩子试穿偏小", community1);
+        aidSvc.addIssueEvent(issue1.getId(), sorter1,
+                "分拣中心从同批 140 码库存中换货，已重新复核消毒记录，公示去向维持原批次不变");
+        aidSvc.resolveIssue(issue1.getId(), "EXCHANGE",
+                "已更换为 140 码同批衣物，家庭二次领取确认", b1.getId(), List.of(a.getId()), sorter1);
+        // 换货补发任务当场完成签收（同一家庭、同一批次，不重复记公益价值）
+        AidDistribution replacementDist = distRepo.findByFamilyOrderByCreatedAtDesc(fam1).stream()
+                .filter(x -> x.getStatus() == AidDistributionStatus.MATCHED).findFirst().orElseThrow();
+        aidSvc.handout(replacementDist.getId(), handoutDto("本人", null, null, 1,
+                "换货补发 140 码冬装 1 件，二次签收（不重复记账）"), sign1, community1);
     }
 
     private void product(Product p) {

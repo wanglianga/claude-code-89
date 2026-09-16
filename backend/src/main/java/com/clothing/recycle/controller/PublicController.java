@@ -6,7 +6,6 @@ import com.clothing.recycle.repo.*;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,15 +21,18 @@ public class PublicController {
     private final SortReviewRepo sortRepo;
     private final UserRepo userRepo;
     private final PartnerRepo partnerRepo;
+    private final AidDistributionRepo distRepo;
     private final ViewMapper vm;
 
     public PublicController(BatchRepo batchRepo, OrderRepo orderRepo, SortReviewRepo sortRepo,
-                            UserRepo userRepo, PartnerRepo partnerRepo, ViewMapper vm) {
+                            UserRepo userRepo, PartnerRepo partnerRepo, AidDistributionRepo distRepo,
+                            ViewMapper vm) {
         this.batchRepo = batchRepo;
         this.orderRepo = orderRepo;
         this.sortRepo = sortRepo;
         this.userRepo = userRepo;
         this.partnerRepo = partnerRepo;
+        this.distRepo = distRepo;
         this.vm = vm;
     }
 
@@ -47,6 +49,37 @@ public class PublicController {
     }
 
     /** 公示大盘数据 */
+    /** 定向发放公示：仅批次/公益项目/机构签收/发放数量与完成状态，
+     *  不含姓名、住址、联系方式、困难细节与领取人照片；匿名家庭统一显示“定向发放完毕”。 */
+    @GetMapping("/aid-summary")
+    public List<Map<String, Object>> aidSummary() {
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (Batch b : batchRepo.findAllByOrderByCreatedAtDesc()) {
+            List<AidDistribution> ds = distRepo.findAllByOrderByCreatedAtDesc().stream()
+                    .filter(d -> d.getBatch().getId().equals(b.getId())).toList();
+            if (ds.isEmpty()) continue;
+            int handed = ds.stream().mapToInt(d -> d.getActualQuantity() == null ? 0 : d.getActualQuantity()).sum();
+            boolean allHidden = ds.stream().allMatch(d -> d.getFamily().isPublicHidden());
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("batchCode", b.getCode());
+            m.put("batchType", b.getBatchType());
+            m.put("projectName", b.getProjectName());
+            m.put("designatedTarget", b.getDesignatedTarget());
+            m.put("organizationName", b.getOrganization() == null ? null : b.getOrganization().getOrganizationName());
+            m.put("signPhotoUrl", com.clothing.recycle.config.ViewMapper.photoUrl(b.getSignPhotoPath()));
+            m.put("receiverName", b.getReceiverName());
+            m.put("signedAt", b.getSignedAt());
+            m.put("distributionCount", ds.size());
+            m.put("handedQuantity", handed);
+            m.put("completed", b.getStatus() == BatchStatus.AID_GIVEN);
+            m.put("statusLabel", allHidden ? "定向发放完毕（领取人信息依其意愿不予公示）"
+                    : "定向发放完毕");
+            m.put("handedAt", b.getAidGivenAt());
+            out.add(m);
+        }
+        return out;
+    }
+
     @GetMapping("/stats")
     public Map<String, Object> stats() {
         Map<String, Object> m = new LinkedHashMap<>();

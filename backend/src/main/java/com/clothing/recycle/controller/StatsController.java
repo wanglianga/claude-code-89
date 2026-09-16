@@ -24,17 +24,21 @@ public class StatsController {
     private final ComplaintRepo complaintRepo;
     private final UserRepo userRepo;
     private final PickupRepo pickupRepo;
+    private final AidDistributionRepo distRepo;
+    private final AidVisitRepo visitRepo;
     private final CurrentUser cu;
 
     public StatsController(OrderRepo orderRepo, SortReviewRepo sortRepo, BatchRepo batchRepo,
                            ComplaintRepo complaintRepo, UserRepo userRepo, PickupRepo pickupRepo,
-                           CurrentUser cu) {
+                           AidDistributionRepo distRepo, AidVisitRepo visitRepo, CurrentUser cu) {
         this.orderRepo = orderRepo;
         this.sortRepo = sortRepo;
         this.batchRepo = batchRepo;
         this.complaintRepo = complaintRepo;
         this.userRepo = userRepo;
         this.pickupRepo = pickupRepo;
+        this.distRepo = distRepo;
+        this.visitRepo = visitRepo;
         this.cu = cu;
     }
 
@@ -192,6 +196,44 @@ public class StatsController {
             out.add(row);
         });
         return out;
+    }
+
+    /** 定向领取效果复盘：按公益项目汇总发放家庭数、件数、回访满意度（供项目账本与街道考核） */
+    @GetMapping("/by-aid")
+    public List<Map<String, Object>> byAid() {
+        cu.require(Role.COMMUNITY, Role.ADMIN, Role.ORG, Role.FINANCE);
+        Map<Long, Map<String, Object>> byBatch = new LinkedHashMap<>();
+        for (AidDistribution d : distRepo.findAllByOrderByCreatedAtDesc()) {
+            if (d.getStatus() != AidDistributionStatus.HANDED_OUT
+                    && d.getStatus() != AidDistributionStatus.EXCHANGED) continue;
+            Batch b = d.getBatch();
+            Map<String, Object> row = byBatch.computeIfAbsent(b.getId(), k -> {
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("batchId", b.getId());
+                r.put("batchCode", b.getCode());
+                r.put("projectName", b.getProjectName());
+                r.put("orgName", b.getOrganization() == null ? "-" : b.getOrganization().getOrganizationName());
+                r.put("designatedTarget", b.getDesignatedTarget());
+                r.put("familyCount", 0L);
+                r.put("quantity", 0);
+                r.put("proxyCount", 0L);
+                return r;
+            });
+            row.put("familyCount", (long) row.get("familyCount") + 1);
+            row.put("quantity", (int) row.get("quantity") + (d.getActualQuantity() == null ? 0 : d.getActualQuantity()));
+            if (d.getProxyName() != null) row.put("proxyCount", (long) row.get("proxyCount") + 1);
+        }
+        for (var row : byBatch.values()) {
+            long bid = (Long) row.get("batchId");
+            var visits = visitRepo.findAllByOrderByVisitedAtDesc().stream()
+                    .filter(v -> v.getBatch() != null && v.getBatch().getId().equals(bid)).toList();
+            row.put("visitCount", visits.size());
+            row.put("avgSatisfaction", visits.isEmpty() ? null
+                    : Math.round(visits.stream().mapToInt(AidVisit::getSatisfaction).average().orElse(0) * 10) / 10.0);
+            row.put("followupNeeds", visits.stream().map(AidVisit::getFollowupNeed)
+                    .filter(Objects::nonNull).filter(s -> !s.isBlank()).toList());
+        }
+        return new ArrayList<>(byBatch.values());
     }
 
     private List<RecycleOrder> filterOrders(String community) {

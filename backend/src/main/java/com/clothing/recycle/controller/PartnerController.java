@@ -11,21 +11,19 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
-/** 企业公益合作、学校捐衣活动、低收入家庭定向领取 */
+/** 企业公益合作、学校捐衣活动 */
 @RestController
 @RequestMapping("/api")
 public class PartnerController {
 
     private final PartnerRepo partnerRepo;
-    private final AidFamilyRepo aidRepo;
     private final RecycleService svc;
     private final ViewMapper vm;
     private final CurrentUser cu;
 
-    public PartnerController(PartnerRepo partnerRepo, AidFamilyRepo aidRepo,
+    public PartnerController(PartnerRepo partnerRepo,
                              RecycleService svc, ViewMapper vm, CurrentUser cu) {
         this.partnerRepo = partnerRepo;
-        this.aidRepo = aidRepo;
         this.svc = svc;
         this.vm = vm;
         this.cu = cu;
@@ -75,27 +73,4 @@ public class PartnerController {
         p.setDescription((String) dto.get("description"));
     }
 
-    // ---------- 低收入家庭定向领取 ----------
-
-    @GetMapping("/aid-families")
-    public List<Map<String, Object>> families() {
-        cu.require(Role.COMMUNITY, Role.ORG, Role.ADMIN);
-        return aidRepo.findAllByOrderByCreatedAtDesc().stream().map(vm::aid).toList();
-    }
-
-    /** 社区登记低收入家庭（信息脱敏存储） */
-    @PostMapping("/aid-families")
-    public Map<String, Object> register(@RequestBody Map<String, Object> dto) {
-        cu.require(Role.COMMUNITY, Role.ADMIN);
-        return vm.aid(svc.registerAid(cu.get(), dto));
-    }
-
-    /** 凭凭证从已签收捐赠批次定向发放 */
-    @PostMapping("/aid-families/{id}/deliver")
-    public Map<String, Object> deliver(@PathVariable Long id, @RequestBody Map<String, Object> dto) {
-        cu.require(Role.COMMUNITY, Role.ORG, Role.ADMIN);
-        return vm.aid(svc.deliverAid(id,
-                Long.parseLong(dto.get("batchId").toString()), cu.get(),
-                (String) dto.get("remark")));
-    }
 }

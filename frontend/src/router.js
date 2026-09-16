@@ -15,6 +15,7 @@ const routes = [
       { path: 'points', component: () => import('./views/PointsView.vue'), meta: { title: '环保积分' } },
       { path: 'batches', component: () => import('./views/BatchesView.vue'), meta: { title: '批次与去向' } },
       { path: 'partners', component: () => import('./views/PartnersView.vue'), meta: { title: '合作与帮扶' } },
+      { path: 'aid', component: () => import('./views/AidView.vue'), meta: { title: '定向领取' } },
       { path: 'review', component: () => import('./views/ReviewView.vue'), meta: { title: '社区复盘' } }
     ]
   }
