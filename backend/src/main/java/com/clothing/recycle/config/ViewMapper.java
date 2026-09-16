@@ -129,8 +129,34 @@ public class ViewMapper {
         m.put("privacyAction", r.getPrivacyAction() == null ? null : r.getPrivacyAction().name());
         m.put("privacyNote", r.getPrivacyNote());
         m.put("photoUrl", photoUrl(r.getPhotoPath()));
+        m.put("privacyPhotoUrl", photoUrl(r.getPrivacyPhotoPath()));
+        // 对外统一的隐私处置结论（标准化措辞，不含原始个人标识）
+        m.put("privacyConclusion", privacyConclusion(r));
         m.put("sorter", Map.of("id", r.getSorter().getId(), "displayName", r.getSorter().getDisplayName()));
         m.put("reviewedAt", r.getReviewedAt());
+        return m;
+    }
+
+    /** 公示端安全结论：仅给出标准处置结论与证据照片，不回传可能含个人标识的原始备注 */
+    public Map<String, Object> privacyConclusion(SortReview r) {
+        if (r == null || !r.isPrivacyRisk()) return null;
+        Map<String, Object> m = new LinkedHashMap<>();
+        if (r.getPrivacyAction() == PrivacyAction.DESENSITIZED) {
+            m.put("action", "DESENSITIZED");
+            m.put("label", "已脱敏后流转");
+            m.put("conclusion", "校徽、工牌、姓名标签等个人标识已拆除或涂销，经分拣复检合格后流转");
+            m.put("evidencePhotoUrl", photoUrl(r.getPrivacyPhotoPath()));
+        } else if (r.getPrivacyAction() == PrivacyAction.REJECTED) {
+            m.put("action", "REJECTED");
+            m.put("label", "隐私拒收");
+            m.put("conclusion", "含无法消除的个人标识，未进入公益流转，已按规定单独登记处置");
+            m.put("evidencePhotoUrl", null);
+        } else {
+            m.put("action", "PENDING");
+            m.put("label", "待处置");
+            m.put("conclusion", "隐私风险待处置，暂不允许流转");
+            m.put("evidencePhotoUrl", null);
+        }
         return m;
     }
 
@@ -169,6 +195,9 @@ public class ViewMapper {
             sortRepo.findByOrder(o).ifPresent(r -> {
                 om.put("category", r.getCategory().name());
                 om.put("weightKg", r.getWeightKg());
+                // 公示溯源只暴露标准化隐私结论与脱敏证据照片，不含原始备注/个人标识
+                Map<String, Object> conclusion = privacyConclusion(r);
+                if (conclusion != null) om.put("privacy", conclusion);
             });
             return om;
         }).toList();
@@ -188,10 +217,21 @@ public class ViewMapper {
         m.put("createdAt", c.getCreatedAt());
         m.put("resolvedAt", c.getResolvedAt());
         RecycleOrder o = c.getOrder();
-        m.put("order", Map.of(
-                "id", o.getId(), "code", o.getCode(),
-                "communityName", o.getCommunityName(), "address", o.getAddress(),
-                "status", o.getStatus().name()));
+        Map<String, Object> orderMap = new LinkedHashMap<>();
+        orderMap.put("id", o.getId());
+        orderMap.put("code", o.getCode());
+        orderMap.put("communityName", o.getCommunityName());
+        orderMap.put("address", o.getAddress());
+        orderMap.put("status", o.getStatus().name());
+        sortRepo.findByOrder(o).ifPresent(r -> {
+            orderMap.put("category", r.getCategory().name());
+            orderMap.put("privacy", privacyConclusion(r));
+            orderMap.put("privacyNote", r.getPrivacyNote());
+            orderMap.put("privacyPhotoUrl", photoUrl(r.getPrivacyPhotoPath()));
+        });
+        pickupRepo.findByOrder(o).ifPresent(p ->
+                orderMap.put("pickupPhotoUrl", photoUrl(p.getPhotoPath())));
+        m.put("order", orderMap);
         m.put("resident", user(c.getResident()));
         m.put("handler", c.getHandler() == null ? null : user(c.getHandler()));
         m.put("events", c.getEvents().stream().map(e -> {

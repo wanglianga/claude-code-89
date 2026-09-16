@@ -143,26 +143,36 @@ public class RecycleService {
         return orderRepo.save(o);
     }
 
-    /** 回收员上门：称重、拍照、初步分类、记录迟到（居民确认在 residentConfirm 中完成） */
+    /** 回收员上门：称重、拍照、初步分类、记录迟到（居民确认在 residentConfirm 中完成）。
+     *  强制证据：有效称重重量、初步分类、现场称重照片缺一不可，否则 4xx 且单据保持 ASSIGNED。 */
     @Transactional
     public PickupRecord recordPickup(Long orderId, User collector, Map<String, Object> dto, String photo) {
         RecycleOrder o = mustOrder(orderId);
         if (o.getStatus() != OrderStatus.ASSIGNED) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "仅已派单单可上门登记");
         }
-        o.setCollector(collector);
+        // ---- 先做全部入参校验，任何一项不满足都不得落库、不得推进状态 ----
         BigDecimal weight = bd(dto.get("weightKg"));
         if (weight == null || weight.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "称重必须大于 0");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "上门登记失败：请填写有效的现场称重重量");
         }
+        String preCategories = str(dto.get("preCategories"));
+        if (preCategories == null || preCategories.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "上门登记失败：请填写现场初步分类");
+        }
+        if (photo == null || photo.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "上门登记失败：必须上传现场称重/打包照片，作为称重证据与后续争议依据");
+        }
+        o.setCollector(collector);
         PickupRecord p = pickupRepo.findByOrder(o).orElseGet(PickupRecord::new);
         p.setOrder(o);
         p.setWeightKg(weight);
         p.setPhotoPath(photo);
-        p.setPreCategories(str(dto.get("preCategories")));
+        p.setPreCategories(preCategories);
         p.setArrivedLate(bool(dto.get("arrivedLate")));
         p.setNote(str(dto.get("note")));
-        p.setArrivedAt(LocalDateTime.now());
+        if (p.getArrivedAt() == null) p.setArrivedAt(LocalDateTime.now());
         pickupRepo.save(p);
 
         o.setStatus(OrderStatus.PICKED_UP);
@@ -207,16 +217,65 @@ public class RecycleService {
 
     // ===================== 分拣中心复核 =====================
 
+    /** 分拣中心复核。隐私风险衣物（校服/工作服/个人信息）强制处置：
+     *  DESENSITIZED（脱敏后流转，须留存脱敏说明与处理后照片，且仅可进入捐赠/消毒整理类）
+     *  或 REJECTED（拒收，终止公益流转）。禁止以 NONE 落库，所有校验先于任何持久化。 */
     @Transactional
     public SortReview sortReview(Long orderId, User sorter, Map<String, Object> dto, String photo) {
+        return sortReview(orderId, sorter, dto, photo, null);
+    }
+
+    @Transactional
+    public SortReview sortReview(Long orderId, User sorter, Map<String, Object> dto,
+                                 String photo, String privacyPhoto) {
         RecycleOrder o = mustOrder(orderId);
         if (o.getStatus() != OrderStatus.PICKED_UP) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "仅已上门回收单可分拣复核");
         }
         PickupRecord p = pickupRepo.findByOrder(o).orElseThrow();
-        SortCategory cat = SortCategory.valueOf(str(dto.get("category")));
+
+        SortCategory cat;
+        try {
+            cat = SortCategory.valueOf(str(dto.get("category")));
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "分拣复核失败：请选择有效的复核分类");
+        }
         BigDecimal weight = bd(dto.get("weightKg"));
         if (weight == null) weight = p.getWeightKg();
+        boolean privacyRisk = bool(dto.get("privacyRisk"));
+        String actionRaw = str(dto.get("privacyAction"));
+        PrivacyAction action = PrivacyAction.NONE;
+        if (actionRaw != null && !actionRaw.isBlank()) {
+            try { action = PrivacyAction.valueOf(actionRaw); }
+            catch (Exception e) { action = PrivacyAction.NONE; }
+        }
+        String privacyNote = str(dto.get("privacyNote"));
+
+        // ---- 隐私风险衣物处置校验（先校验后落库，拒绝时不产生分拣记录） ----
+        if (privacyRisk) {
+            if (action != PrivacyAction.DESENSITIZED && action != PrivacyAction.REJECTED) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "分拣复核失败：含校服/工作服/个人信息的隐私风险衣物，必须选择「脱敏后流转」或「拒收」，不得按无风险处理");
+            }
+            if (privacyNote == null || privacyNote.isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "分拣复核失败：隐私衣物处置必须留存书面说明（脱敏措施或拒收依据）");
+            }
+            if (action == PrivacyAction.DESENSITIZED) {
+                if (privacyPhoto == null || privacyPhoto.isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "分拣复核失败：脱敏后流转必须上传脱敏处理后的复检照片作为证据");
+                }
+                if (cat != SortCategory.DIRECT_DONATE && cat != SortCategory.NEED_CLEAN) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "分拣复核失败：脱敏流转仅适用于可直接捐赠/需消毒整理类衣物；环保再生或不可回收类请直接拒收或按非风险登记");
+                }
+            }
+        } else {
+            action = PrivacyAction.NONE;
+            privacyNote = null;
+            privacyPhoto = null;
+        }
 
         SortReview r = sortRepo.findByOrder(o).orElseGet(SortReview::new);
         r.setOrder(o);
@@ -226,12 +285,10 @@ public class RecycleService {
         r.setWeightDiff(weight.subtract(p.getWeightKg()));
         r.setDamageReason(str(dto.get("damageReason")));
         r.setDestination(str(dto.get("destination")));
-        r.setPrivacyRisk(bool(dto.get("privacyRisk")));
-        PrivacyAction action = r.isPrivacyRisk()
-                ? PrivacyAction.valueOf(str(dto.getOrDefault("privacyAction", "NONE")))
-                : PrivacyAction.NONE;
+        r.setPrivacyRisk(privacyRisk);
         r.setPrivacyAction(action);
-        r.setPrivacyNote(str(dto.get("privacyNote")));
+        r.setPrivacyNote(privacyNote);
+        r.setPrivacyPhotoPath(privacyPhoto);
         r.setPhotoPath(photo);
         sortRepo.save(r);
 
@@ -255,6 +312,46 @@ public class RecycleService {
         List<Long> ids = parseIds(dto.get("orderIds"));
         if (ids.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请选择入批回收单");
 
+        // ---- 先校验全部回收单（任一项不满足则整体失败，不落空批次、不改状态） ----
+        List<RecycleOrder> toAdd = new ArrayList<>();
+        List<SortReview> reviews = new ArrayList<>();
+        BigDecimal total = BigDecimal.ZERO;
+        int items = 0;
+        for (Long id : ids) {
+            RecycleOrder o = mustOrder(id);
+            if (o.getStatus() != OrderStatus.SORTED || o.getBatch() != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "回收单 " + o.getCode() + " 未处于可入批状态");
+            }
+            SortReview r = sortRepo.findByOrder(o)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            o.getCode() + " 缺少分拣复核记录"));
+            if (r.getPrivacyAction() == PrivacyAction.REJECTED) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        o.getCode() + " 为隐私拒收单，依法不得进入公益流转批次");
+            }
+            if (r.isPrivacyRisk() && r.getPrivacyAction() == PrivacyAction.DESENSITIZED
+                    && (r.getPrivacyPhotoPath() == null || r.getPrivacyPhotoPath().isBlank())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        o.getCode() + " 缺少脱敏处理后复检照片，不得入批");
+            }
+            if ("DONATION".equals(batchType)
+                    && r.getCategory() != SortCategory.DIRECT_DONATE
+                    && r.getCategory() != SortCategory.NEED_CLEAN) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        o.getCode() + " 非捐赠类，不能入捐赠批次");
+            }
+            if ("RECYCLE".equals(batchType) && r.getCategory() != SortCategory.ECO_RECYCLE) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        o.getCode() + " 非环保再生类，不能入再生批次");
+            }
+            toAdd.add(o);
+            reviews.add(r);
+            total = total.add(r.getWeightKg());
+            items += o.getItemCount() == null ? 0 : o.getItemCount();
+        }
+
+        // ---- 全部通过后才建批 ----
         Batch b = new Batch();
         b.setCode("B2026" + String.format("%05d", new Random().nextInt(100000)));
         b.setBatchType(batchType);
@@ -273,29 +370,10 @@ public class RecycleService {
         }
         b = batchRepo.save(b);
 
-        BigDecimal total = BigDecimal.ZERO;
-        int items = 0;
-        for (Long id : ids) {
-            RecycleOrder o = mustOrder(id);
-            if (o.getStatus() != OrderStatus.SORTED || o.getBatch() != null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "回收单 " + o.getCode() + " 未处于可入批状态");
-            }
-            SortReview r = sortRepo.findByOrder(o).orElseThrow();
-            if ("DONATION".equals(batchType)
-                    && r.getCategory() != SortCategory.DIRECT_DONATE
-                    && r.getCategory() != SortCategory.NEED_CLEAN) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        o.getCode() + " 非捐赠类，不能入捐赠批次");
-            }
-            if ("RECYCLE".equals(batchType) && r.getCategory() != SortCategory.ECO_RECYCLE) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        o.getCode() + " 非环保再生类，不能入再生批次");
-            }
+        for (int i = 0; i < toAdd.size(); i++) {
+            RecycleOrder o = toAdd.get(i);
             o.setBatch(b);
             orderRepo.save(o);
-            total = total.add(r.getWeightKg());
-            items += o.getItemCount() == null ? 0 : o.getItemCount();
         }
         b.setTotalWeightKg(total);
         b.setItemCount(items);

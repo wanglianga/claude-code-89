@@ -104,9 +104,11 @@
         </el-form-item>
         <el-form-item label="是否迟到"><el-switch v-model="pickupForm.arrivedLate" active-text="本次上门迟到" /></el-form-item>
         <el-form-item label="现场照片"><el-upload :http-request="uploadPickupPhoto" :show-file-list="false" accept="image/*">
-          <el-button :icon="Picture">上传称重/打包照片</el-button>
+          <el-button :icon="Picture">上传称重/打包照片（必传）</el-button>
           <el-image v-if="pickupForm.photoUrl" :src="pickupForm.photoUrl" style="width:180px;margin-left:12px" />
-        </el-upload></el-form-item>
+        </el-upload>
+        <div class="muted" v-if="!pickupForm.photoUrl">无现场称重照片不能完成上门登记</div>
+        </el-form-item>
         <el-form-item label="备注"><el-input v-model="pickupForm.note" type="textarea" /></el-form-item>
       </el-form>
       <template #footer>
@@ -155,7 +157,20 @@
               <el-radio value="REJECTED">拒收（不进入公益流转）</el-radio>
             </el-radio-group>
           </el-form-item>
-          <el-form-item label="脱敏/拒收说明"><el-input v-model="sortForm.privacyNote" type="textarea" /></el-form-item>
+          <el-form-item :label="sortForm.privacyAction==='DESENSITIZED' ? '脱敏措施说明' : '拒收依据说明'">
+            <el-input v-model="sortForm.privacyNote" type="textarea"
+                      :placeholder="sortForm.privacyAction==='DESENSITIZED'
+                        ? '必填：逐条记录拆除/涂销了哪些个人标识（校徽、工牌、姓名标签等）'
+                        : '必填：拒收原因与登记处置方式'" />
+          </el-form-item>
+          <el-form-item v-if="sortForm.privacyAction==='DESENSITIZED'" label="脱敏处理照片">
+            <el-upload :http-request="uploadPrivacyPhoto" :show-file-list="false" accept="image/*">
+              <el-button :icon="Picture">上传脱敏处理后复检照片（必传）</el-button>
+            </el-upload>
+            <el-image v-if="sortForm.privacyPhotoUrl" :src="sortForm.privacyPhotoUrl"
+                      style="width:180px;margin-left:12px" />
+            <div class="muted" v-if="!sortForm.privacyPhotoUrl">无处理照片不得流转入公益批</div>
+          </el-form-item>
         </template>
         <el-form-item label="复核照片"><el-upload :http-request="uploadSortPhoto" :show-file-list="false" accept="image/*">
           <el-button :icon="Picture">上传分拣照片</el-button>
@@ -240,9 +255,13 @@
             <el-descriptions-item v-if="current.sort.damageReason" label="污损原因">{{ current.sort.damageReason }}</el-descriptions-item>
             <el-descriptions-item label="去向">{{ current.sort.destination }}</el-descriptions-item>
             <el-descriptions-item v-if="current.sort.privacyRisk" label="隐私处置">
-              <span class="privacy-tag">
-                {{ current.sort.privacyAction==='DESENSITIZED' ? '✂️ 已脱敏' : '⛔ 拒收' }}：{{ current.sort.privacyNote }}
-              </span>
+              <el-tag :type="current.sort.privacyAction==='DESENSITIZED'?'success':'danger'" effect="dark">
+                {{ current.sort.privacyConclusion?.label }}
+              </el-tag>
+              <div class="muted" style="margin-top:4px">{{ current.sort.privacyConclusion?.conclusion }}</div>
+              <el-image v-if="current.sort.privacyPhotoUrl" :src="current.sort.privacyPhotoUrl"
+                        class="photo-thumb" style="max-height:180px;margin-top:6px"
+                        preview-src-list="[current.sort.privacyPhotoUrl]" />
             </el-descriptions-item>
             <el-descriptions-item label="分拣员">{{ current.sort.sorter.displayName }}</el-descriptions-item>
           </el-descriptions>
@@ -352,11 +371,13 @@ async function uploadPickupPhoto(opt) {
 }
 async function submitPickup() {
   if (!pickupForm.value.weightKg) return ElMessage.warning('请输入称重')
+  if (!pickupForm.value.preCategories) return ElMessage.warning('请填写初步分类')
+  if (!pickupForm.value._file) return ElMessage.warning('必须上传现场称重/打包照片')
   const fd = new FormData()
   Object.entries(pickupForm.value).forEach(([k, v]) => {
     if (k[0] !== '_' && k !== 'photoUrl' && v !== null && v !== '') fd.append(k, v)
   })
-  if (pickupForm.value._file) fd.append('photo', pickupForm.value._file)
+  fd.append('photo', pickupForm.value._file)
   await api.post(`/api/orders/${current.value.id}/pickup`, fd)
   ElMessage.success('上门登记完成，等待居民确认')
   pickupDlg.value = false
@@ -387,7 +408,7 @@ function openSort(row) {
   sortForm.value = {
     category: 'DIRECT_DONATE', weightKg: Number(row.pickupWeight),
     damageReason: '', destination: '', privacyRisk: false, privacyAction: 'DESENSITIZED',
-    privacyNote: '', photoUrl: ''
+    privacyNote: '', photoUrl: '', privacyPhotoUrl: ''
   }
   sortDlg.value = true
 }
@@ -395,16 +416,31 @@ async function uploadSortPhoto(opt) {
   sortForm.value._file = opt.file
   sortForm.value.photoUrl = URL.createObjectURL(opt.file)
 }
+async function uploadPrivacyPhoto(opt) {
+  sortForm.value._privacyFile = opt.file
+  sortForm.value.privacyPhotoUrl = URL.createObjectURL(opt.file)
+}
 async function submitSort() {
-  if (sortForm.value.privacyRisk && sortForm.value.privacyAction === 'REJECTED'
-      && !sortForm.value.privacyNote) {
-    return ElMessage.warning('隐私拒收必须填写说明并存档')
+  const f = sortForm.value
+  if (f.privacyRisk) {
+    if (!f.privacyAction) return ElMessage.warning('隐私风险衣物必须选择脱敏后流转或拒收')
+    if (!f.privacyNote?.trim()) {
+      return ElMessage.warning(f.privacyAction === 'DESENSITIZED' ? '请填写脱敏措施说明' : '请填写拒收依据说明')
+    }
+    if (f.privacyAction === 'DESENSITIZED' && !f._privacyFile) {
+      return ElMessage.warning('脱敏后流转必须上传处理后的复检照片')
+    }
+    if (f.privacyAction === 'DESENSITIZED'
+        && f.category !== 'DIRECT_DONATE' && f.category !== 'NEED_CLEAN') {
+      return ElMessage.warning('脱敏流转仅适用于可直接捐赠/需消毒整理类')
+    }
   }
   const fd = new FormData()
-  Object.entries(sortForm.value).forEach(([k, v]) => {
-    if (k[0] !== '_' && k !== 'photoUrl' && v !== null && v !== '') fd.append(k, v)
+  Object.entries(f).forEach(([k, v]) => {
+    if (k[0] !== '_' && k !== 'photoUrl' && k !== 'privacyPhotoUrl' && v !== null && v !== '') fd.append(k, v)
   })
-  if (sortForm.value._file) fd.append('photo', sortForm.value._file)
+  if (f._file) fd.append('photo', f._file)
+  if (f._privacyFile) fd.append('privacyPhoto', f._privacyFile)
   await api.post(`/api/orders/${current.value.id}/sort`, fd)
   ElMessage.success('复核完成')
   sortDlg.value = false

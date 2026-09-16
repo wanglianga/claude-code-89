@@ -56,6 +56,9 @@ public class SortReview {
     @Column(length = 500)
     private String privacyNote;
 
+    /** 脱敏处理后照片（脱敏流转的必要证据，如拆除标识后的复检照片） */
+    private String privacyPhotoPath;
+
     private String photoPath;
 
     private LocalDateTime reviewedAt = LocalDateTime.now();

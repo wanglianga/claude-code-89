@@ -129,7 +129,10 @@
             </el-table-column>
             <el-table-column label="去向/隐私">
               <template #default="{row}">
-                <span v-if="row.sort.privacyAction==='DESENSITIZED'" class="privacy-tag">✂️ 已脱敏</span>
+                <span v-if="row.sort.privacyRisk" class="privacy-tag">
+                  🔒 {{ row.sort.privacyConclusion?.label || '隐私处置' }}
+                  {{ row.sort.privacyPhotoUrl ? '·证据✓' : '' }}
+                </span>
                 <span v-else>{{ row.sort.destination }}</span>
               </template>
             </el-table-column>

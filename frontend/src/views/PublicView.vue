@@ -122,7 +122,18 @@
                   <el-tag size="small" :type="SORT_CATEGORY[o.category]?.type" effect="plain">
                     {{ SORT_CATEGORY[o.category]?.label }}
                   </el-tag>
+                  <el-tag v-if="o.privacy" size="small" type="success" effect="dark">
+                    🔒 {{ o.privacy.label }}
+                  </el-tag>
                   <span class="trace-w">{{ o.weightKg }}kg</span>
+                </div>
+                <div v-if="b.orders.some(o => o.privacy)" class="privacy-note">
+                  🔒 含个人标识的校服/工作服已按隐私规范处置：脱敏件拆除标识并复检留证，拒收件未进入公益流转。
+                  <template v-for="o in b.orders.filter(x => x.privacy?.evidencePhotoUrl)" :key="o.id">
+                    <el-image class="privacy-ev" :src="o.privacy.evidencePhotoUrl"
+                              :preview-src-list="[o.privacy.evidencePhotoUrl]"
+                              fit="cover" preview-teleported />
+                  </template>
                 </div>
               </el-collapse-item>
             </el-collapse>
@@ -233,5 +244,8 @@ onMounted(async () => {
 .trace { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
 .trace-code { font-weight: 600; }
 .trace-w { color: #64705a; margin-left: auto; }
+.privacy-note { background: #f0f7f4; border: 1px solid #cde7dc; color: #3a7a5f; border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; margin: 6px 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.privacy-ev { width: 54px; height: 40px; border-radius: 6px; cursor: zoom-in; }
 .footer { text-align: center; color: #97a0af; font-size: 12px; padding: 30px 0; }
 </style>

@@ -114,6 +114,9 @@ public class DataSeeder implements CommandLineRunner {
         String pL = photos.generate("pickup-l.jpg", 0x80B918);
         String sA = photos.generate("sort-a.jpg", 0x5FA8D3);
         String sD = photos.generate("sort-d.jpg", 0x4C9F70);
+        String privacyC = photos.generate("privacy-c.jpg", 0x2A9D8F);
+        String pM = photos.generate("pickup-m.jpg", 0xB5657D);
+        String pN = photos.generate("pickup-n.jpg", 0x7D8CA6);
         String donate1 = photos.generate("donation-b1.jpg", 0xE07A5F);
         String donate2 = photos.generate("donation-b2.jpg", 0xF2A541);
         String recycle1 = photos.generate("recycle-b3.jpg", 0x3D5A80);
@@ -186,7 +189,7 @@ public class DataSeeder implements CommandLineRunner {
         svc.residentConfirm(c.getId(), resident3, "MIXED");
         svc.sortReview(c.getId(), sorter1, sort("DIRECT_DONATE", new BigDecimal("2.28"), null,
                 "脱敏后发往暖阳公益-打工子弟冬季温暖包", true, "DESENSITIZED",
-                "已拆除校徽、胸牌与姓名标签，脱敏登记编号 S-0912-03"), null);
+                "已拆除校徽、胸牌与姓名标签，脱敏登记编号 S-0912-03"), sA, privacyC);
 
         Batch b1 = svc.createBatch(sorter1, Map.of(
                 "batchType", "DONATION",
@@ -295,7 +298,7 @@ public class DataSeeder implements CommandLineRunner {
         RecycleOrder m = svc.createOrder(resident1, orderDto("阳光花园小区", 14, "裤装,上衣",
                 false, false, "阳光花园 3 栋 502", "2026-09-15 09:00-11:00", true, null));
         svc.assignOrder(m.getId(), collector1);
-        svc.recordPickup(m.getId(), collector1, pickup(new BigDecimal("5.20"), "需消毒整理", false, ""), null);
+        svc.recordPickup(m.getId(), collector1, pickup(new BigDecimal("5.20"), "需消毒整理", false, ""), pM);
         svc.residentConfirm(m.getId(), resident1, "DONATION");
         svc.sortReview(m.getId(), sorter1, sort("NEED_CLEAN", new BigDecimal("5.10"),
                 "部分需清洗", "待消毒后并入下一捐赠批", false, null, null), null);
@@ -303,7 +306,7 @@ public class DataSeeder implements CommandLineRunner {
         RecycleOrder n = svc.createOrder(resident3, orderDto("阳光花园小区", 20, "旧衣,裤装",
                 false, false, "阳光花园 12 栋 1803", "2026-09-15 14:00-16:00", false, null));
         svc.assignOrder(n.getId(), collector2);
-        svc.recordPickup(n.getId(), collector2, pickup(new BigDecimal("7.40"), "环保再生", false, ""), null);
+        svc.recordPickup(n.getId(), collector2, pickup(new BigDecimal("7.40"), "环保再生", false, ""), pN);
         svc.residentConfirm(n.getId(), resident3, "POINTS");
         svc.sortReview(n.getId(), sorter1, sort("ECO_RECYCLE", new BigDecimal("7.30"), null,
                 "待并入下一再生批", false, null, null), null);

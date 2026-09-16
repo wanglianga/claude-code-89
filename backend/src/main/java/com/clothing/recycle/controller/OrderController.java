@@ -126,22 +126,26 @@ public class OrderController {
         return vm.order(svc.mustOrder(id));
     }
 
-    /** 分拣中心复核（multipart：字段 + 照片） */
+    /** 分拣中心复核（multipart：字段 + 分拣照片 + 脱敏处理照片） */
     @PostMapping(value = "/{id}/sort", consumes = "multipart/form-data")
     public Map<String, Object> sort(@PathVariable Long id,
                                     @RequestParam Map<String, String> form,
-                                    @RequestParam(required = false) MultipartFile photo) throws Exception {
+                                    @RequestParam(required = false) MultipartFile photo,
+                                    @RequestParam(required = false) MultipartFile privacyPhoto) throws Exception {
         cu.require(Role.SORTER);
         String path = storage.save(photo);
-        svc.sortReview(id, cu.get(), new java.util.HashMap<>(form), path);
+        String privacyPath = storage.save(privacyPhoto);
+        svc.sortReview(id, cu.get(), new java.util.HashMap<>(form), path, privacyPath);
         return vm.order(svc.mustOrder(id));
     }
 
-    /** 分拣中心复核（JSON，便于无文件场景） */
+    /** 分拣中心复核（JSON，便于无文件场景；脱敏流转须改走 multipart 上传处理照片） */
     @PostMapping("/{id}/sort-json")
     public Map<String, Object> sortJson(@PathVariable Long id, @RequestBody Map<String, Object> dto) {
         cu.require(Role.SORTER);
-        svc.sortReview(id, cu.get(), dto, dto.get("photoPath") == null ? null : dto.get("photoPath").toString());
+        String path = dto.get("photoPath") == null ? null : dto.get("photoPath").toString();
+        String privacyPath = dto.get("privacyPhotoPath") == null ? null : dto.get("privacyPhotoPath").toString();
+        svc.sortReview(id, cu.get(), dto, path, privacyPath);
         return vm.order(svc.mustOrder(id));
     }
 

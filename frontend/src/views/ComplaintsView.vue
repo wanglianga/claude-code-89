@@ -125,6 +125,12 @@
           <el-step title="批次去向" :description="order.batch ? `${order.batch.code} · ${BATCH_STATUS[order.batch.status].label}` : '待集货入批'" />
         </el-steps>
         <el-image v-if="order.pickup?.photoUrl" :src="order.pickup.photoUrl" class="photo-thumb" style="max-height:200px;margin-top:12px" />
+        <el-alert v-if="order.privacy" type="success" :closable="false" class="privacy-alert"
+                  :title="`隐私处置结论：${order.privacy.label}`"
+                  :description="order.privacy.conclusion" />
+        <el-image v-if="order.privacy?.evidencePhotoUrl" :src="order.privacy.evidencePhotoUrl"
+                  class="photo-thumb" style="max-height:180px;margin-top:8px"
+                  :preview-src-list="[order.privacy.evidencePhotoUrl]" />
       </template>
     </el-drawer>
   </div>
@@ -231,4 +237,6 @@ function fmt(t) { return t ? t.replace('T', ' ').slice(0, 16) : '' }
 .evt-body { font-size: 13px; line-height: 1.6; }
 .resolve-row { display: flex; gap: 10px; margin-top: 12px; align-items: center; }
 .resolved-box { background: #f0f9eb; border: 1px solid #c2e7b0; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #4e8a2f; }
+.privacy-alert { margin-top: 10px; }
+.privacy-alert :deep(.el-alert__description) { font-size: 12px; }
 </style>
