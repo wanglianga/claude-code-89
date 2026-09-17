@@ -435,6 +435,17 @@ public class RecycleService {
         b.setSignedAt(LocalDateTime.now());
         for (RecycleOrder o : b.getOrders()) {
             o.setStatus(OrderStatus.DONATED);
+            // 机构签收即冻结该来源单的定向发放可分配件数（按上门登记件数），
+            // 此后匹配只能在 可分配-已预占-已发放 的余额内按件锁定；非可直接捐赠单余额为 0。
+            SortReview sr = sortRepo.findByOrder(o).orElse(null);
+            if ("DONATION".equals(b.getBatchType()) && sr != null
+                    && sr.getCategory() == SortCategory.DIRECT_DONATE) {
+                o.setAidAllocatableQuantity(o.getItemCount() == null ? 0 : Math.max(0, o.getItemCount()));
+            } else {
+                o.setAidAllocatableQuantity(0);
+            }
+            o.setAidReservedQuantity(0);
+            o.setAidIssuedQuantity(0);
             orderRepo.save(o);
         }
         return batchRepo.save(b);

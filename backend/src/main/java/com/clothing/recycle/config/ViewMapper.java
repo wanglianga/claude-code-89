@@ -243,6 +243,8 @@ public class ViewMapper {
         m.put("signedAt", b.getSignedAt());
         m.put("recycledAt", b.getRecycledAt());
         m.put("aidGivenAt", b.getAidGivenAt());
+        // 已定向发放件数：仅由真实签收从来源单汇总写回，预占/取消/退回不计
+        m.put("aidGivenQuantity", b.getAidGivenQuantity());
         m.put("createdAt", b.getCreatedAt());
         m.put("organization", b.getOrganization() == null ? null : user(b.getOrganization()));
         m.put("partner", b.getPartner() == null ? null : partner(b.getPartner()));
@@ -322,6 +324,11 @@ public class ViewMapper {
             });
             om.put("code", o.getCode());
             om.put("communityName", o.getCommunityName());
+            // 定向领取按件库存：可分配 / 已预占 / 已发放 / 当前可匹配剩余
+            om.put("aidAllocatableQuantity", o.aidAllocatable());
+            om.put("aidReservedQuantity", o.aidReserved());
+            om.put("aidIssuedQuantity", o.aidIssued());
+            om.put("aidAvailableQuantity", o.aidAvailable());
             return om;
         }).toList();
         for (var o : memberOrders) if (o.isPublicHidden()) hiddenCount++;

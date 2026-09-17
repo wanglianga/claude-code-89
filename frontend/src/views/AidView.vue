@@ -191,7 +191,7 @@
                 :title="`${matchFamily?.maskedName} 需求：${matchFamily?.needCount}人 · 尺码 ${matchFamily?.sizes} · ${matchFamily?.seasons} · ${matchFamily?.clothTypes}`" />
       <el-radio-group v-model="matchBatchId" @change="loadCandidateOrders" style="margin-bottom:10px">
         <el-radio-button v-for="c in candidates" :key="c.id" :value="c.id" :label="c.id">
-          {{ c.code }} {{ c.projectName }}
+          {{ c.code }} {{ c.projectName }}（可发 {{ c.aidAvailableQuantity }} 件）
           <el-tag v-if="c.localPriority" size="small" type="success">属地优先</el-tag>
           <el-tag v-if="c.designatedTarget" size="small" type="warning">指定：{{ c.designatedTarget }}</el-tag>
         </el-radio-button>
@@ -202,12 +202,21 @@
         <el-table-column prop="code" label="单号" width="110" />
         <el-table-column prop="communityName" label="小区" width="120" />
         <el-table-column label="分类"><template #default="{row}"><el-tag size="small" type="success">可直接捐赠</el-tag></template></el-table-column>
+        <el-table-column label="按件库存（可分配/预占/已发/可发）" min-width="200">
+          <template #default="{row}">
+            {{ row.aidAllocatableQuantity }} / {{ row.aidReservedQuantity }} / {{ row.aidIssuedQuantity }} /
+            <b :style="row.aidAvailableQuantity>0?'color:#67c23a':'color:#909399'">{{ row.aidAvailableQuantity }}</b>
+          </template>
+        </el-table-column>
         <el-table-column label="重量/卫生" min-width="140">
           <template #default="{row}">{{ row.sort.weightKg }}kg · 分拣员 {{ row.sort.sorter.displayName }}</template>
         </el-table-column>
       </el-table>
       <el-form label-width="100px" style="margin-top:10px">
-        <el-form-item label="计划发放件数"><el-input-number v-model="matchQty" :min="1" /></el-form-item>
+        <el-form-item label="计划发放件数">
+          <el-input-number v-model="matchQty" :min="1" :max="matchAvailable" />
+          <span class="muted" style="margin-left:10px">勾选来源单合计可发 {{ matchAvailable }} 件，超出将被后端拒绝（按件锁定，不允许跨家庭超发）</span>
+        </el-form-item>
       </el-form>
       <template #footer><el-button @click="matchDlg=false">取消</el-button><el-button type="primary" @click="submitMatch">生成定向领取任务</el-button></template>
     </el-dialog>
@@ -230,7 +239,10 @@
             <el-input v-model="hf.proxyAuthNote" type="textarea" :rows="2" placeholder="登记人电话确认 / 社区确认授权书编号（无授权不得发放）" />
           </el-form-item>
         </template>
-        <el-form-item label="实际领取件数" required><el-input-number v-model="hf.actualQuantity" :min="1" /></el-form-item>
+        <el-form-item label="实际领取件数" required>
+          <el-input-number v-model="hf.actualQuantity" :min="1" :max="hf.lockedQuantity || 1" />
+          <span class="muted" style="margin-left:8px">本任务已从来源单锁定 {{ hf.lockedQuantity }} 件，超出将被拒绝</span>
+        </el-form-item>
         <el-form-item label="签收照片" required>
           <input type="file" accept="image/*" @change="onSignFile" />
           <el-image v-if="hf.signUrl" :src="hf.signUrl" style="width:160px;margin-top:6px" />
@@ -369,10 +381,13 @@ const candidateOrders = ref([])
 const matchBatchId = ref(null)
 const matchOrders = ref([])
 const matchQty = ref(3)
+// 勾选来源单的当前可匹配剩余合计（可分配-已预占-已发放），计划件数不得超过
+const matchAvailable = computed(() =>
+  matchOrders.value.reduce((s, o) => s + (o.aidAvailableQuantity || 0), 0))
 async function openMatch(row) {
   matchFamily.value = row
   candidates.value = await api.get(`/api/aid/candidates?familyId=${row.id}`)
-  if (!candidates.value.length) return ElMessage.warning('暂无可直接捐赠的已签收批次（待消毒/再生/不可回收均不可发放）')
+  if (!candidates.value.length) return ElMessage.warning('暂无可直接捐赠且仍有剩余件数的已签收批次（待消毒/再生/不可回收/已发完均不可发放）')
   matchBatchId.value = candidates.value[0].id; matchOrders.value = []
   await loadCandidateOrders()
   matchDlg.value = true
@@ -380,17 +395,25 @@ async function openMatch(row) {
 async function loadCandidateOrders() {
   const b = candidates.value.find(c => c.id === matchBatchId.value)
   const detail = await api.get(`/api/batches/${matchBatchId.value}`)
+  // 仅可直接捐赠、机构已签收、且按件库存仍有剩余的来源单；发完即不再出现
   candidateOrders.value = detail.orders.filter(o =>
-    !o.anonymous && o.category === 'DIRECT_DONATE' && o.status === 'DONATED')
-  matchQty.value = (matchFamily.value.needCount || 1) * 3
+    !o.anonymous && o.category === 'DIRECT_DONATE' && o.status === 'DONATED'
+      && (o.aidAvailableQuantity || 0) > 0)
+  const total = candidateOrders.value.reduce((s, o) => s + (o.aidAvailableQuantity || 0), 0)
+  matchQty.value = Math.min((matchFamily.value.needCount || 1) * 3, total) || 1
 }
 async function submitMatch() {
   if (!matchOrders.value.length) return ElMessage.warning('请勾选匹配回收单')
-  await api.post('/api/aid/match', {
-    familyId: matchFamily.value.id, batchId: matchBatchId.value,
-    orderIds: matchOrders.value.map(o => o.id), plannedQuantity: matchQty.value })
-  ElMessage.success('已生成定向领取任务，通知社区经办人'); matchDlg.value = false
-  loadFamilies(); loadDist()
+  if (matchQty.value > matchAvailable.value) {
+    return ElMessage.warning(`计划 ${matchQty.value} 件超过勾选来源单可发剩余 ${matchAvailable.value} 件，库存不足无法锁定`)
+  }
+  try {
+    await api.post('/api/aid/match', {
+      familyId: matchFamily.value.id, batchId: matchBatchId.value,
+      orderIds: matchOrders.value.map(o => o.id), plannedQuantity: matchQty.value })
+    ElMessage.success('已按来源单逐件锁定库存并生成定向领取任务，通知社区经办人'); matchDlg.value = false
+    loadFamilies(); loadDist()
+  } catch (e) { /* 拦截器提示 4xx；库存、公示与通知均不变 */ }
 }
 
 // 领取核验
@@ -399,7 +422,12 @@ const hf = ref({})
 let currentDist = null
 function openHandout(row) {
   currentDist = row
-  hf.value = { receiverRelation: '本人', actualQuantity: row.plannedQuantity, proxyName: '', proxyAuthNote: '', handNote: '', signUrl: '', _file: null }
+  hf.value = {
+    receiverRelation: '本人',
+    actualQuantity: Math.min(row.plannedQuantity, row.lockedQuantity || row.plannedQuantity),
+    lockedQuantity: row.lockedQuantity || 0,
+    proxyName: '', proxyAuthNote: '', handNote: '', signUrl: '', _file: null
+  }
   handoutDlg.value = true
 }
 function onSignFile(e) { hf.value._file = e.target.files[0]; hf.value.signUrl = URL.createObjectURL(e.target.files[0]) }
@@ -408,11 +436,15 @@ async function submitHandout() {
   if (hf.value.receiverRelation !== '本人' && (!hf.value.proxyName || !hf.value.proxyAuthNote))
     return ElMessage.warning('代领必须登记代领人与授权依据')
   if (!hf.value._file && !hf.value.handNote) return ElMessage.warning('需签收照片或签字记录')
+  if (hf.value.actualQuantity > (hf.value.lockedQuantity || 0))
+    return ElMessage.warning(`实领 ${hf.value.actualQuantity} 件超过本任务锁定库存 ${hf.value.lockedQuantity} 件，禁止超发`)
   const fd = new FormData()
-  Object.entries(hf.value).forEach(([k, v]) => { if (k[0] !== '_' && k !== 'signUrl' && v !== null && v !== '') fd.append(k, String(v)) })
+  Object.entries(hf.value).forEach(([k, v]) => { if (k[0] !== '_' && k !== 'signUrl' && k !== 'lockedQuantity' && v !== null && v !== '') fd.append(k, String(v)) })
   if (hf.value._file) fd.append('signPhoto', hf.value._file)
-  await api.post(`/api/aid/distributions/${currentDist.id}/handout`, fd)
-  ElMessage.success('领取完成'); handoutDlg.value = false; loadDist(); loadFamilies(); loadValues()
+  try {
+    await api.post(`/api/aid/distributions/${currentDist.id}/handout`, fd)
+    ElMessage.success('领取完成'); handoutDlg.value = false; loadDist(); loadFamilies(); loadValues()
+  } catch (e) { /* 4xx 时库存、公示与通知均不变，弹窗保留以便修正 */ }
 }
 
 // 异常

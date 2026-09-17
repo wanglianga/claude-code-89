@@ -22,17 +22,19 @@ public class PublicController {
     private final UserRepo userRepo;
     private final PartnerRepo partnerRepo;
     private final AidDistributionRepo distRepo;
+    private final AidAllocationRepo allocationRepo;
     private final ViewMapper vm;
 
     public PublicController(BatchRepo batchRepo, OrderRepo orderRepo, SortReviewRepo sortRepo,
                             UserRepo userRepo, PartnerRepo partnerRepo, AidDistributionRepo distRepo,
-                            ViewMapper vm) {
+                            AidAllocationRepo allocationRepo, ViewMapper vm) {
         this.batchRepo = batchRepo;
         this.orderRepo = orderRepo;
         this.sortRepo = sortRepo;
         this.userRepo = userRepo;
         this.partnerRepo = partnerRepo;
         this.distRepo = distRepo;
+        this.allocationRepo = allocationRepo;
         this.vm = vm;
     }
 
@@ -50,16 +52,23 @@ public class PublicController {
 
     /** 公示大盘数据 */
     /** 定向发放公示：仅批次/公益项目/机构签收/发放数量与完成状态，
-     *  不含姓名、住址、联系方式、困难细节与领取人照片；匿名家庭统一显示“定向发放完毕”。 */
+     *  不含姓名、住址、联系方式、困难细节与领取人照片；匿名家庭统一显示“定向发放完毕”。
+     *  发放件数只统计来源回收单真实签收件数（AidOrderAllocation.issuedQuantity 汇总），
+     *  待领取预占、已取消/退回任务均不计入，杜绝跨家庭超发进入公示。 */
     @GetMapping("/aid-summary")
     public List<Map<String, Object>> aidSummary() {
         List<Map<String, Object>> out = new java.util.ArrayList<>();
         for (Batch b : batchRepo.findAllByOrderByCreatedAtDesc()) {
-            List<AidDistribution> ds = distRepo.findAllByOrderByCreatedAtDesc().stream()
-                    .filter(d -> d.getBatch().getId().equals(b.getId())).toList();
-            if (ds.isEmpty()) continue;
-            int handed = ds.stream().mapToInt(d -> d.getActualQuantity() == null ? 0 : d.getActualQuantity()).sum();
-            boolean allHidden = ds.stream().allMatch(d -> d.getFamily().isPublicHidden());
+            List<AidDistribution> handed = distRepo.findAllByOrderByCreatedAtDesc().stream()
+                    .filter(d -> d.getBatch().getId().equals(b.getId()))
+                    .filter(d -> d.getStatus() == AidDistributionStatus.HANDED_OUT
+                            || d.getStatus() == AidDistributionStatus.EXCHANGED)
+                    .filter(d -> d.getActualQuantity() != null && d.getActualQuantity() > 0)
+                    .toList();
+            if (handed.isEmpty()) continue;
+            int handedQty = allocationRepo.sumIssuedByBatchId(b.getId());
+            if (handedQty <= 0) continue;
+            boolean allHidden = handed.stream().allMatch(d -> d.getFamily().isPublicHidden());
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("batchCode", b.getCode());
             m.put("batchType", b.getBatchType());
@@ -69,8 +78,8 @@ public class PublicController {
             m.put("signPhotoUrl", com.clothing.recycle.config.ViewMapper.photoUrl(b.getSignPhotoPath()));
             m.put("receiverName", b.getReceiverName());
             m.put("signedAt", b.getSignedAt());
-            m.put("distributionCount", ds.size());
-            m.put("handedQuantity", handed);
+            m.put("distributionCount", handed.size());
+            m.put("handedQuantity", handedQty);
             m.put("completed", b.getStatus() == BatchStatus.AID_GIVEN);
             m.put("statusLabel", allHidden ? "定向发放完毕（领取人信息依其意愿不予公示）"
                     : "定向发放完毕");

@@ -518,8 +518,19 @@ public class DataSeeder implements CommandLineRunner {
         aidSvc.handout(d2.getId(), handoutDto("社区工作人员代领", "社区工作人员小陈",
                 "登记人电话确认（通话已录音存档）+社区授权书 AUTH-0916-02", 1,
                 "配送上门，老人签收确认"), sign2, community1);
-        aidSvc.recordValue(b5.getId(), new BigDecimal("45.00"), 1,
-                "保暖外套 1 件（拒收改配批次，唯一记账）", finance1);
+
+        // 同一改配批 b5 的第二个领取家庭：来源单 RO202600007 共 6 件，累计已发 2 件、剩余 4 件，
+        // 第三户再匹配/签收时只能在剩余 4 件内按件锁定（用于跨家庭超发与并发预占验收）
+        AidFamily fam2b = aidSvc.register(community1, familyDto(
+                "赵*", "135****0921", "阳光花园小区", "朝阳街道", "LOW_INCOME",
+                "低保证已核验，仅留存核验结论", 1, 1, "男68岁", "L", "秋冬", "保暖外套",
+                true, false, "DELIVERY", true, null, "独居老人临时救助，要求公示匿名"));
+        AidDistribution d2b = aidSvc.match(fam2b.getId(), b5.getId(), List.of(k.getId()), 1, sorter1);
+        aidSvc.handout(d2b.getId(), handoutDto("社区工作人员代领", "社区工作人员小陈",
+                "社区确认授权书 AUTH-0916-03", 1,
+                "配送上门，老人签收确认"), sign2, community1);
+        aidSvc.recordValue(b5.getId(), new BigDecimal("90.00"), 2,
+                "保暖外套 2 件（拒收改配批次，唯一记账）", finance1);
         aidSvc.visit(fam2.getId(), Map.of(
                 "wearingSituation", "外套合身保暖", "satisfaction", 4, "followupNeed", "暂无"), community1);
 

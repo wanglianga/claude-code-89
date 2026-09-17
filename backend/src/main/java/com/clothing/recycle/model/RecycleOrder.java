@@ -83,4 +83,21 @@ public class RecycleOrder {
 
     /** 重量冗余字段，便于统计（来自上门称重） */
     private BigDecimal pickupWeight;
+
+    // ---------- 定向领取按件库存（仅对可直接捐赠、机构已签收后的来源单有意义） ----------
+    /** 可分配件数：机构签收时按回收单件数初始化（null 视为尚未初始化，不参与定向发放） */
+    private Integer aidAllocatableQuantity;
+
+    /** 已预占件数：分拣匹配生成待领取任务时锁定，签收/取消/退回/换货时按同一明细扣减或释放 */
+    private Integer aidReservedQuantity = 0;
+
+    /** 已发放件数：实际签收后累加，只增不减（取消/退回释放的是未签收预占，不冲减已发放） */
+    private Integer aidIssuedQuantity = 0;
+
+    public int aidAllocatable() { return aidAllocatableQuantity == null ? 0 : aidAllocatableQuantity; }
+    public int aidReserved() { return aidReservedQuantity == null ? 0 : aidReservedQuantity; }
+    public int aidIssued() { return aidIssuedQuantity == null ? 0 : aidIssuedQuantity; }
+
+    /** 当前可匹配余额：可分配 - 已预占 - 已发放；未初始化可分配量的回收单余额为 0 */
+    public int aidAvailable() { return aidAllocatable() - aidReserved() - aidIssued(); }
 }

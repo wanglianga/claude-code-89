@@ -24,13 +24,15 @@ public class AidController {
     private final AidIssueEventRepo eventRepo;
     private final AidVisitRepo visitRepo;
     private final AidValueRepo valueRepo;
+    private final AidAllocationRepo allocationRepo;
     private final ViewMapper vm;
     private final CurrentUser cu;
     private final FileStorage storage;
 
     public AidController(AidService aid, AidFamilyRepo familyRepo, AidDistributionRepo distRepo,
                          AidIssueRepo issueRepo, AidIssueEventRepo eventRepo, AidVisitRepo visitRepo,
-                         AidValueRepo valueRepo, ViewMapper vm, CurrentUser cu, FileStorage storage) {
+                         AidValueRepo valueRepo, AidAllocationRepo allocationRepo,
+                         ViewMapper vm, CurrentUser cu, FileStorage storage) {
         this.aid = aid;
         this.familyRepo = familyRepo;
         this.distRepo = distRepo;
@@ -38,6 +40,7 @@ public class AidController {
         this.eventRepo = eventRepo;
         this.visitRepo = visitRepo;
         this.valueRepo = valueRepo;
+        this.allocationRepo = allocationRepo;
         this.vm = vm;
         this.cu = cu;
         this.storage = storage;
@@ -221,6 +224,17 @@ public class AidController {
         m.put("matchedBy", d.getMatchedBy().getDisplayName());
         m.put("plannedQuantity", d.getPlannedQuantity());
         m.put("actualQuantity", d.getActualQuantity());
+        // 来源回收单按件锁定明细：预占/已签收，计划与实领都不得超出锁定件数
+        List<AidOrderAllocation> allocs = allocationRepo.findByDistributionOrderByIdAsc(d);
+        m.put("lockedQuantity", allocs.stream().mapToInt(AidOrderAllocation::getReservedQuantity).sum());
+        m.put("allocations", allocs.stream().map(a -> {
+            Map<String, Object> am = new LinkedHashMap<>();
+            am.put("orderId", a.getOrder().getId());
+            am.put("orderCode", a.getOrder().getCode());
+            am.put("reservedQuantity", a.getReservedQuantity());
+            am.put("issuedQuantity", a.getIssuedQuantity());
+            return am;
+        }).toList());
         m.put("receiverRelation", d.getReceiverRelation());
         m.put("proxyName", d.getProxyName());
         m.put("proxyAuthNote", d.getProxyAuthNote());
