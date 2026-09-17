@@ -61,6 +61,16 @@
             <el-table-column label="计划/实领" width="100">
               <template #default="{row}">{{ row.plannedQuantity }} / {{ row.actualQuantity || '-' }}</template>
             </el-table-column>
+            <el-table-column label="来源单预占/已发" min-width="150">
+              <template #default="{row}">
+                <span v-if="row.items && row.items.length">
+                  <el-tag v-for="it in row.items" :key="it.orderId" size="small" style="margin-right:4px">
+                    {{ it.orderCode }} {{ it.reservedQuantity }}/{{ it.distributedQuantity }}
+                  </el-tag>
+                </span>
+                <span v-else class="muted">-</span>
+              </template>
+            </el-table-column>
             <el-table-column label="领取核验" min-width="180">
               <template #default="{row}">
                 <template v-if="row.status==='HANDED_OUT' || row.status==='EXCHANGED'">
@@ -191,7 +201,7 @@
                 :title="`${matchFamily?.maskedName} 需求：${matchFamily?.needCount}人 · 尺码 ${matchFamily?.sizes} · ${matchFamily?.seasons} · ${matchFamily?.clothTypes}`" />
       <el-radio-group v-model="matchBatchId" @change="loadCandidateOrders" style="margin-bottom:10px">
         <el-radio-button v-for="c in candidates" :key="c.id" :value="c.id" :label="c.id">
-          {{ c.code }} {{ c.projectName }}
+          {{ c.code }} {{ c.projectName }}（可发放 {{ c.availableQuantity }} 件）
           <el-tag v-if="c.localPriority" size="small" type="success">属地优先</el-tag>
           <el-tag v-if="c.designatedTarget" size="small" type="warning">指定：{{ c.designatedTarget }}</el-tag>
         </el-radio-button>
@@ -202,12 +212,20 @@
         <el-table-column prop="code" label="单号" width="110" />
         <el-table-column prop="communityName" label="小区" width="120" />
         <el-table-column label="分类"><template #default="{row}"><el-tag size="small" type="success">可直接捐赠</el-tag></template></el-table-column>
+        <el-table-column label="库存(可分配/已预占/已发放)" min-width="150">
+          <template #default="{row}">{{ row.aidAllocatableQuantity }} / {{ row.aidReservedQuantity }} / {{ row.aidDistributedQuantity }}</template>
+        </el-table-column>
+        <el-table-column label="剩余可发" width="90">
+          <template #default="{row}"><el-tag size="small" :type="row.aidAvailableQuantity > 0 ? 'success' : 'info'">{{ row.aidAvailableQuantity }} 件</el-tag></template>
+        </el-table-column>
         <el-table-column label="重量/卫生" min-width="140">
           <template #default="{row}">{{ row.sort.weightKg }}kg · 分拣员 {{ row.sort.sorter.displayName }}</template>
         </el-table-column>
       </el-table>
       <el-form label-width="100px" style="margin-top:10px">
-        <el-form-item label="计划发放件数"><el-input-number v-model="matchQty" :min="1" /></el-form-item>
+        <el-form-item :label="`计划发放件数（剩余可发 ${matchMaxQty} 件）`">
+          <el-input-number v-model="matchQty" :min="1" :max="matchMaxQty || 1" />
+        </el-form-item>
       </el-form>
       <template #footer><el-button @click="matchDlg=false">取消</el-button><el-button type="primary" @click="submitMatch">生成定向领取任务</el-button></template>
     </el-dialog>
@@ -230,7 +248,10 @@
             <el-input v-model="hf.proxyAuthNote" type="textarea" :rows="2" placeholder="登记人电话确认 / 社区确认授权书编号（无授权不得发放）" />
           </el-form-item>
         </template>
-        <el-form-item label="实际领取件数" required><el-input-number v-model="hf.actualQuantity" :min="1" /></el-form-item>
+        <el-form-item label="实际领取件数" required>
+          <el-input-number v-model="hf.actualQuantity" :min="1" :max="currentDist?.plannedQuantity || 1" />
+          <span class="muted" style="margin-left:8px">本任务预占 {{ currentDist?.plannedQuantity }} 件，不得超发</span>
+        </el-form-item>
         <el-form-item label="签收照片" required>
           <input type="file" accept="image/*" @change="onSignFile" />
           <el-image v-if="hf.signUrl" :src="hf.signUrl" style="width:160px;margin-top:6px" />
@@ -380,12 +401,18 @@ async function openMatch(row) {
 async function loadCandidateOrders() {
   const b = candidates.value.find(c => c.id === matchBatchId.value)
   const detail = await api.get(`/api/batches/${matchBatchId.value}`)
+  // 仅可直接捐赠且剩余可分配 > 0 的来源单可勾选（已发完/已预占完不再候选）
   candidateOrders.value = detail.orders.filter(o =>
-    !o.anonymous && o.category === 'DIRECT_DONATE' && o.status === 'DONATED')
+    !o.anonymous && o.category === 'DIRECT_DONATE' && o.status === 'DONATED' && o.aidAvailableQuantity > 0)
   matchQty.value = (matchFamily.value.needCount || 1) * 3
 }
+// 所选来源单剩余可分配总量（计划件数上限）
+const matchMaxQty = computed(() =>
+  matchOrders.value.reduce((s, o) => s + (o.aidAvailableQuantity || 0), 0))
 async function submitMatch() {
   if (!matchOrders.value.length) return ElMessage.warning('请勾选匹配回收单')
+  if (matchQty.value > matchMaxQty.value)
+    return ElMessage.warning(`所选来源单剩余可分配共 ${matchMaxQty.value} 件，不能超发`)
   await api.post('/api/aid/match', {
     familyId: matchFamily.value.id, batchId: matchBatchId.value,
     orderIds: matchOrders.value.map(o => o.id), plannedQuantity: matchQty.value })

@@ -83,4 +83,24 @@ public class RecycleOrder {
 
     /** 重量冗余字段，便于统计（来自上门称重） */
     private BigDecimal pickupWeight;
+
+    // ---------- 定向发放库存（按件锁定，防跨家庭超额发放） ----------
+    /** 可分配件数：分拣复核为可直接捐赠时登记（=衣物件数），其他分类为 0 */
+    @Column(nullable = false)
+    private Integer aidAllocatableQuantity = 0;
+
+    /** 已预占件数：匹配生成领取任务时锁定，签收/取消/换货/退回/转家庭时按明细结转或释放 */
+    @Column(nullable = false)
+    private Integer aidReservedQuantity = 0;
+
+    /** 已发放件数：领取签收后累计（真实发放，公示与公益价值以此为准） */
+    @Column(nullable = false)
+    private Integer aidDistributedQuantity = 0;
+
+    /** 剩余可预占件数 */
+    public int aidAvailable() {
+        return (aidAllocatableQuantity == null ? 0 : aidAllocatableQuantity)
+                - (aidReservedQuantity == null ? 0 : aidReservedQuantity)
+                - (aidDistributedQuantity == null ? 0 : aidDistributedQuantity);
+    }
 }

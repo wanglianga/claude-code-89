@@ -2,6 +2,9 @@ package com.clothing.recycle.service;
 
 import com.clothing.recycle.model.*;
 import com.clothing.recycle.repo.*;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +23,7 @@ public class AidService {
 
     private final AidFamilyRepo familyRepo;
     private final AidDistributionRepo distRepo;
+    private final AidDistributionItemRepo distItemRepo;
     private final AidIssueRepo issueRepo;
     private final AidIssueEventRepo issueEventRepo;
     private final AidVisitRepo visitRepo;
@@ -28,11 +32,16 @@ public class AidService {
     private final OrderRepo orderRepo;
     private final SortReviewRepo sortRepo;
 
-    public AidService(AidFamilyRepo familyRepo, AidDistributionRepo distRepo, AidIssueRepo issueRepo,
+    @PersistenceContext
+    private EntityManager em;
+
+    public AidService(AidFamilyRepo familyRepo, AidDistributionRepo distRepo,
+                      AidDistributionItemRepo distItemRepo, AidIssueRepo issueRepo,
                       AidIssueEventRepo issueEventRepo, AidVisitRepo visitRepo, AidValueRepo valueRepo,
                       BatchRepo batchRepo, OrderRepo orderRepo, SortReviewRepo sortRepo) {
         this.familyRepo = familyRepo;
         this.distRepo = distRepo;
+        this.distItemRepo = distItemRepo;
         this.issueRepo = issueRepo;
         this.issueEventRepo = issueEventRepo;
         this.visitRepo = visitRepo;
@@ -96,7 +105,8 @@ public class AidService {
     // ===================== 分拣匹配 =====================
 
     /** 可匹配批次：公益机构已签收（卫生把关）的捐赠批，且含可直接捐赠类回收单；
-     *  待消毒/环保再生/不可回收/拒收/在途批次均不可用。属地（同小区/同街道）优先。 */
+     *  待消毒/环保再生/不可回收/拒收/在途批次均不可用。属地（同小区/同街道）优先。
+     *  来源单剩余可分配件数为 0（已发完/已预占完）的批次不再进入候选。 */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> candidateBatches(AidFamily family) {
         List<Map<String, Object>> out = new ArrayList<>();
@@ -114,6 +124,7 @@ public class AidService {
             m.put("totalWeightKg", b.getTotalWeightKg());
             m.put("aidGivenQuantity", b.getAidGivenQuantity());
             m.put("readyOrderCount", ready.size());
+            m.put("availableQuantity", ready.stream().mapToInt(RecycleOrder::aidAvailable).sum());
             m.put("signedAt", b.getSignedAt());
             boolean local = ready.stream().anyMatch(o ->
                     family.getCommunityName() != null
@@ -127,18 +138,27 @@ public class AidService {
     }
 
     private List<RecycleOrder> readyOrders(Batch b) {
+        List<RecycleOrder> ready = new ArrayList<>();
+        for (RecycleOrder o : eligibleOrders(b)) {
+            if (o.aidAvailable() > 0) ready.add(o); // 剩余可分配为 0（已发完/已预占完）不再候选
+        }
+        return ready;
+    }
+
+    /** 批次内按品类与隐私处置结论允许定向发放的回收单（不看剩余库存） */
+    private List<RecycleOrder> eligibleOrders(Batch b) {
         List<RecycleOrder> members = b.getStatus() == BatchStatus.REJECTED
                 ? b.getOriginalOrders() : b.getOrders();
-        List<RecycleOrder> ready = new ArrayList<>();
+        List<RecycleOrder> eligible = new ArrayList<>();
         for (RecycleOrder o : members) {
             SortReview r = sortRepo.findByOrder(o).orElse(null);
             // 仅可直接捐赠；需消毒整理、环保再生、不可回收、特殊处理一律不得发放
             if (r != null && r.getCategory() == SortCategory.DIRECT_DONATE
                     && r.getPrivacyAction() != PrivacyAction.REJECTED) {
-                ready.add(o);
+                eligible.add(o);
             }
         }
-        return ready;
+        return eligible;
     }
 
     @Transactional
@@ -170,14 +190,16 @@ public class AidService {
                 || (b.getStatus() != BatchStatus.RECEIVED && b.getStatus() != BatchStatus.AID_GIVEN)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "仅公益机构已签收的捐赠批可定向发放");
         }
-        List<RecycleOrder> ready = readyOrders(b);
-        Map<Long, RecycleOrder> readyMap = new HashMap<>();
-        ready.forEach(o -> readyMap.put(o.getId(), o));
+        List<RecycleOrder> eligible = eligibleOrders(b);
+        Map<Long, RecycleOrder> eligibleMap = new HashMap<>();
+        eligible.forEach(o -> eligibleMap.put(o.getId(), o));
         if (orderIds == null || orderIds.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请选择匹配的回收单");
         }
-        for (Long oid : orderIds) {
-            if (!readyMap.containsKey(oid)) {
+        // 去重并保持选择顺序
+        List<Long> uniqueIds = orderIds.stream().distinct().toList();
+        for (Long oid : uniqueIds) {
+            if (!eligibleMap.containsKey(oid)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "回收单 " + oid + " 不属于可直接捐赠的已签收衣物，不能定向发放（待消毒/再生/不可回收均不可）");
             }
@@ -187,17 +209,71 @@ public class AidService {
                 && !b.getDesignatedTarget().equals(f.getDesignatedTarget())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "该批为指定捐赠批次，与登记的指定对象不一致");
         }
+
+        // ---- 锁定来源单库存：逐单 FOR UPDATE，并发匹配时总预占不超过剩余可分配 ----
+        Map<Long, RecycleOrder> locked = lockOrders(uniqueIds);
+        int totalAvailable = uniqueIds.stream().mapToInt(id -> locked.get(id).aidAvailable()).sum();
+        int planned;
+        if (plannedQuantity == null) {
+            planned = totalAvailable; // 未指定件数时预占所选来源单全部剩余
+        } else if (plannedQuantity <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "计划发放件数必须大于 0");
+        } else {
+            planned = plannedQuantity;
+        }
+        if (totalAvailable <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "所选回收单可分配库存已用完（全部已发放或被其他家庭预占），不能重复匹配");
+        }
+        if (planned > totalAvailable) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "来源衣物库存不足：所选回收单剩余可分配共 " + totalAvailable
+                            + " 件，无法预占 " + planned + " 件（已发放与已预占部分不得超发）");
+        }
+
         AidDistribution d = new AidDistribution();
         d.setFamily(f);
         d.setBatch(b);
         d.setMatchedBy(sorter);
-        d.setMatchedOrderIds(orderIds.toString().replaceAll("[\\[\\] ]", ""));
-        d.setPlannedQuantity(plannedQuantity == null || plannedQuantity <= 0
-                ? orderIds.size() * 3 : plannedQuantity);
+        d.setMatchedOrderIds(uniqueIds.toString().replaceAll("[\\[\\] ]", ""));
+        d.setPlannedQuantity(planned);
         d.setStatus(AidDistributionStatus.MATCHED);
+        d = distRepo.save(d);
+
+        // 按选择顺序逐单预占，生成发放明细并累加来源单已预占件数
+        int remaining = planned;
+        for (Long oid : uniqueIds) {
+            if (remaining <= 0) break;
+            RecycleOrder o = locked.get(oid);
+            int take = Math.min(o.aidAvailable(), remaining);
+            if (take <= 0) continue;
+            o.setAidReservedQuantity(o.getAidReservedQuantity() + take);
+            orderRepo.save(o);
+            AidDistributionItem item = new AidDistributionItem();
+            item.setDistribution(d);
+            item.setOrder(o);
+            item.setReservedQuantity(take);
+            distItemRepo.save(item);
+            remaining -= take;
+        }
         f.setStatus(AidStatus.MATCHED);
         familyRepo.save(f);
-        return distRepo.save(d);
+        return d;
+    }
+
+    /** 按 id 升序逐单加写锁（SELECT ... FOR UPDATE，固定加锁顺序避免死锁），
+     *  并强制从数据库重载最新库存，保证并发匹配时读取到的是已提交的最新预占/已发放数。 */
+    private Map<Long, RecycleOrder> lockOrders(Collection<Long> ids) {
+        em.flush(); // 先落库本事务内已做的库存变更（如换货先释放再预占的场景）
+        Map<Long, RecycleOrder> locked = new LinkedHashMap<>();
+        for (Long id : ids.stream().distinct().sorted().toList()) {
+            RecycleOrder o = orderRepo.findById(id)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                            "回收单 " + id + " 不存在"));
+            em.refresh(o, LockModeType.PESSIMISTIC_WRITE);
+            locked.put(id, o);
+        }
+        return locked;
     }
 
     // ===================== 领取核验（防冒领/代领授权/签收证据） =====================
@@ -210,8 +286,14 @@ public class AidService {
         }
         int qty = integer(dto.get("actualQuantity"), 0);
         if (qty <= 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请填写实际领取数量");
-        if (qty > d.getPlannedQuantity() + 5) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "实领数量明显超出计划，请说明后重新登记");
+        // 实领不得超过本任务预占库存（按来源单明细），防止超发
+        List<AidDistributionItem> items = distItemRepo.findByDistributionIdOrderByIdAsc(d.getId());
+        int remainingReserved = items.stream()
+                .mapToInt(i -> i.getReservedQuantity() - i.getDistributedQuantity()).sum();
+        if (qty > remainingReserved) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "实领数量超出该任务预占库存（剩余可领 " + remainingReserved
+                            + " 件），不得超发；如需调整请先取消任务重新匹配");
         }
         String relation = str(dto.get("receiverRelation"));
         if (relation == null || relation.isBlank()) {
@@ -242,6 +324,21 @@ public class AidService {
         d.setHandedAt(LocalDateTime.now());
         d.setStatus(AidDistributionStatus.HANDED_OUT);
         distRepo.save(d);
+
+        // ---- 按同一明细结转库存：预占 → 已发放；未领取部分释放回可分配池 ----
+        Map<Long, RecycleOrder> locked = lockOrders(items.stream().map(i -> i.getOrder().getId()).toList());
+        int left = qty;
+        for (AidDistributionItem item : items) {
+            RecycleOrder o = locked.get(item.getOrder().getId());
+            int itemRemaining = item.getReservedQuantity() - item.getDistributedQuantity();
+            int consume = Math.min(itemRemaining, left);
+            o.setAidReservedQuantity(o.getAidReservedQuantity() - itemRemaining);
+            o.setAidDistributedQuantity(o.getAidDistributedQuantity() + consume);
+            orderRepo.save(o);
+            item.setDistributedQuantity(item.getDistributedQuantity() + consume);
+            distItemRepo.save(item);
+            left -= consume;
+        }
 
         AidFamily f = d.getFamily();
         f.setStatus(AidStatus.RECEIVED);
@@ -298,7 +395,8 @@ public class AidService {
     }
 
     /** 异常处置：换货/退回重新分拣/转其他家庭/补充分拣/取消。
-     *  只新增处置记录与新任务，绝不改写已签收批次的公示字段。 */
+     *  只新增处置记录与新任务，绝不改写已签收批次的公示字段；
+     *  来源单库存按发放明细统一释放（未领预占）或扣减（已领退回）。 */
     @Transactional
     public AidIssue resolveIssue(Long issueId, String action, String note,
                                  Long replacementBatchId, List<Long> replacementOrderIds,
@@ -311,11 +409,17 @@ public class AidService {
         AidDistribution d = issue.getDistribution();
         switch (action) {
             case "CANCEL", "TRANSFER_FAMILY" -> {
+                // 取消 / 转其他家庭：释放未领预占，衣物回到可分配池
+                releaseReservation(d);
                 d.setStatus(AidDistributionStatus.CANCELLED);
                 d.getFamily().setStatus(AidStatus.RESERVED);
                 familyRepo.save(d.getFamily());
             }
             case "RETURN_RESORT", "ADDITIONAL_SORT" -> {
+                // 退回重新分拣 / 补充分拣：释放未领预占；已签收部分按退回扣减，
+                // 衣物离开可分配池进入重分，公示累计同步减少（只统计真实已发放）
+                releaseReservation(d);
+                returnDistributed(d);
                 d.setStatus(AidDistributionStatus.RETURNED);
                 d.getFamily().setStatus(AidStatus.RESERVED);
                 familyRepo.save(d.getFamily());
@@ -324,6 +428,8 @@ public class AidService {
                 if (replacementBatchId == null || replacementOrderIds == null || replacementOrderIds.isEmpty()) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "换货须选择替代批次与回收单");
                 }
+                // 换货：旧任务未领预占释放，新任务按替代来源单重新预占（库存校验同匹配）
+                releaseReservation(d);
                 d.setStatus(AidDistributionStatus.RETURNED);
                 d.setRehandled(true);
                 // 换货属同一家庭的补发，豁免防重复匹配，但不重复计算公益价值
@@ -341,6 +447,48 @@ public class AidService {
         issue.setStatus(ComplaintStatus.RESOLVED);
         issue.setResolvedAt(LocalDateTime.now());
         return issueRepo.save(issue);
+    }
+
+    /** 释放任务未领取的预占件数（按明细逐单释放回来源单可分配池） */
+    private void releaseReservation(AidDistribution d) {
+        List<AidDistributionItem> items = distItemRepo.findByDistributionIdOrderByIdAsc(d.getId());
+        if (items.isEmpty()) return;
+        Map<Long, RecycleOrder> locked = lockOrders(items.stream().map(i -> i.getOrder().getId()).toList());
+        for (AidDistributionItem item : items) {
+            int unreceived = item.getReservedQuantity() - item.getDistributedQuantity();
+            if (unreceived <= 0) continue;
+            RecycleOrder o = locked.get(item.getOrder().getId());
+            o.setAidReservedQuantity(o.getAidReservedQuantity() - unreceived);
+            orderRepo.save(o);
+            item.setReservedQuantity(item.getDistributedQuantity());
+            distItemRepo.save(item);
+        }
+    }
+
+    /** 已签收任务的退回：按明细扣减来源单已发放件数（衣物退出可分配池进入重分），
+     *  并同步减少批次公示累计，保证公示只统计真实已发放数量。 */
+    private void returnDistributed(AidDistribution d) {
+        if (d.getStatus() != AidDistributionStatus.HANDED_OUT) return;
+        List<AidDistributionItem> items = distItemRepo.findByDistributionIdOrderByIdAsc(d.getId());
+        int returned = items.stream().mapToInt(AidDistributionItem::getDistributedQuantity).sum();
+        if (returned <= 0) return;
+        Map<Long, RecycleOrder> locked = lockOrders(items.stream().map(i -> i.getOrder().getId()).toList());
+        for (AidDistributionItem item : items) {
+            if (item.getDistributedQuantity() <= 0) continue;
+            RecycleOrder o = locked.get(item.getOrder().getId());
+            o.setAidDistributedQuantity(o.getAidDistributedQuantity() - item.getDistributedQuantity());
+            // 退回衣物进入重新分拣，不再属于可分配库存
+            o.setAidAllocatableQuantity(Math.max(0,
+                    o.getAidAllocatableQuantity() - item.getDistributedQuantity()));
+            orderRepo.save(o);
+            item.setReservedQuantity(item.getReservedQuantity() - item.getDistributedQuantity());
+            item.setDistributedQuantity(0);
+            distItemRepo.save(item);
+        }
+        Batch b = d.getBatch();
+        b.setAidGivenQuantity(Math.max(0,
+                (b.getAidGivenQuantity() == null ? 0 : b.getAidGivenQuantity()) - returned));
+        batchRepo.save(b);
     }
 
     // ===================== 回访 =====================
@@ -370,6 +518,12 @@ public class AidService {
         if (valueRepo.findByBatch(b).isPresent()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "该批次公益价值已记账，禁止重复入账（积分/捐赠金额/物资价值每批只记一次）");
+        }
+        // 公益价值只统计真实已发放数量：记账件数不得超过批次实际签收件数
+        int given = b.getAidGivenQuantity() == null ? 0 : b.getAidGivenQuantity();
+        if (quantity != null && quantity > given) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "记账件数超过该批真实已发放件数（" + given + " 件），公益价值不得按未发放数量入账");
         }
         AidValueRecord rec = new AidValueRecord();
         rec.setBatch(b);

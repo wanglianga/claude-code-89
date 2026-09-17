@@ -25,12 +25,14 @@ public class StatsController {
     private final UserRepo userRepo;
     private final PickupRepo pickupRepo;
     private final AidDistributionRepo distRepo;
+    private final AidDistributionItemRepo distItemRepo;
     private final AidVisitRepo visitRepo;
     private final CurrentUser cu;
 
     public StatsController(OrderRepo orderRepo, SortReviewRepo sortRepo, BatchRepo batchRepo,
                            ComplaintRepo complaintRepo, UserRepo userRepo, PickupRepo pickupRepo,
-                           AidDistributionRepo distRepo, AidVisitRepo visitRepo, CurrentUser cu) {
+                           AidDistributionRepo distRepo, AidDistributionItemRepo distItemRepo,
+                           AidVisitRepo visitRepo, CurrentUser cu) {
         this.orderRepo = orderRepo;
         this.sortRepo = sortRepo;
         this.batchRepo = batchRepo;
@@ -38,6 +40,7 @@ public class StatsController {
         this.userRepo = userRepo;
         this.pickupRepo = pickupRepo;
         this.distRepo = distRepo;
+        this.distItemRepo = distItemRepo;
         this.visitRepo = visitRepo;
         this.cu = cu;
     }
@@ -220,7 +223,12 @@ public class StatsController {
                 return r;
             });
             row.put("familyCount", (long) row.get("familyCount") + 1);
-            row.put("quantity", (int) row.get("quantity") + (d.getActualQuantity() == null ? 0 : d.getActualQuantity()));
+            // 件数按来源单发放明细汇总（真实已发放），无明细的历史数据回退到实领数
+            List<AidDistributionItem> items = distItemRepo.findByDistributionIdOrderByIdAsc(d.getId());
+            int qty = items.isEmpty()
+                    ? (d.getActualQuantity() == null ? 0 : d.getActualQuantity())
+                    : items.stream().mapToInt(AidDistributionItem::getDistributedQuantity).sum();
+            row.put("quantity", (int) row.get("quantity") + qty);
             if (d.getProxyName() != null) row.put("proxyCount", (long) row.get("proxyCount") + 1);
         }
         for (var row : byBatch.values()) {

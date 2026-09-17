@@ -79,6 +79,11 @@ public class ViewMapper {
         m.put("timeSlot", o.getTimeSlot());
         m.put("donateWanted", o.isDonateWanted());
         m.put("status", o.getStatus().name());
+        // 定向发放库存（件）：可分配 / 已预占 / 已发放 / 剩余可预占
+        m.put("aidAllocatableQuantity", o.getAidAllocatableQuantity());
+        m.put("aidReservedQuantity", o.getAidReservedQuantity());
+        m.put("aidDistributedQuantity", o.getAidDistributedQuantity());
+        m.put("aidAvailableQuantity", o.aidAvailable());
         m.put("createdAt", o.getCreatedAt());
         m.put("assignedAt", o.getAssignedAt());
         m.put("pickedAt", o.getPickedAt());
@@ -322,6 +327,13 @@ public class ViewMapper {
             });
             om.put("code", o.getCode());
             om.put("communityName", o.getCommunityName());
+            if (!publicView) {
+                // 内部视图：来源单定向发放库存（件），供匹配界面按剩余可分配选择
+                om.put("aidAllocatableQuantity", o.getAidAllocatableQuantity());
+                om.put("aidReservedQuantity", o.getAidReservedQuantity());
+                om.put("aidDistributedQuantity", o.getAidDistributedQuantity());
+                om.put("aidAvailableQuantity", o.aidAvailable());
+            }
             return om;
         }).toList();
         for (var o : memberOrders) if (o.isPublicHidden()) hiddenCount++;

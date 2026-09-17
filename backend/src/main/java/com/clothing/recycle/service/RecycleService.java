@@ -303,6 +303,9 @@ public class RecycleService {
         } else {
             o.setStatus(OrderStatus.SORTED);
         }
+        // 定向发放库存登记：仅可直接捐赠类按件进入可分配池，其余分类不可定向发放
+        o.setAidAllocatableQuantity(cat == SortCategory.DIRECT_DONATE
+                ? (o.getItemCount() == null ? 0 : o.getItemCount()) : 0);
         o.setSortedAt(LocalDateTime.now());
         orderRepo.save(o);
         return r;
@@ -529,6 +532,10 @@ public class RecycleService {
                 o.setCurrentBatch(null); // 释放回可入批池，来源批次 batch 字段保留
                 resortWeight = resortWeight.add(w);
             }
+            // 重新分拣后按新分类重置定向发放可分配池（改配捐赠→按件可分配；转再生/终止→0）
+            o.setAidAllocatableQuantity(newCat == SortCategory.DIRECT_DONATE
+                    && outcome != ResortOutcome.FINAL_REJECT
+                    ? (o.getItemCount() == null ? 0 : o.getItemCount()) : 0);
             o.setSortedAt(LocalDateTime.now());
             orderRepo.save(o);
         }

@@ -510,16 +510,17 @@ public class DataSeeder implements CommandLineRunner {
 
         // ================= 定向领取：匿名代领家庭 + 指定对象 + 异常处置 =================
         // 匿名家庭：从尺码拒收改配批 b5 领取，老人不便到场由社区代领（授权留痕），公示仅显示批次
+        // 来源单 RO202600007（k，共 6 件）本次发放 2 件，剩余 4 件可继续定向发放
         AidFamily fam2 = aidSvc.register(community1, familyDto(
                 "李*", "137****6620", "阳光花园小区", "朝阳街道", "TEMP_RELIEF",
-                "临时救助材料已核验", 2, 1, "女72岁", "XL", "秋冬", "保暖外套",
+                "临时救助材料已核验", 2, 2, "女72岁", "XL", "秋冬", "保暖外套",
                 false, false, "DELIVERY", true, null, "独居老人临时救助，要求公示完全匿名"));
-        AidDistribution d2 = aidSvc.match(fam2.getId(), b5.getId(), List.of(k.getId()), 1, sorter1);
+        AidDistribution d2 = aidSvc.match(fam2.getId(), b5.getId(), List.of(k.getId()), 2, sorter1);
         aidSvc.handout(d2.getId(), handoutDto("社区工作人员代领", "社区工作人员小陈",
-                "登记人电话确认（通话已录音存档）+社区授权书 AUTH-0916-02", 1,
-                "配送上门，老人签收确认"), sign2, community1);
-        aidSvc.recordValue(b5.getId(), new BigDecimal("45.00"), 1,
-                "保暖外套 1 件（拒收改配批次，唯一记账）", finance1);
+                "登记人电话确认（通话已录音存档）+社区授权书 AUTH-0916-02", 2,
+                "保暖外套等 2 件配送上门，老人签收确认"), sign2, community1);
+        aidSvc.recordValue(b5.getId(), new BigDecimal("90.00"), 2,
+                "保暖外套等 2 件（拒收改配批次，唯一记账）", finance1);
         aidSvc.visit(fam2.getId(), Map.of(
                 "wearingSituation", "外套合身保暖", "satisfaction", 4, "followupNeed", "暂无"), community1);
 

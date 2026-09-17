@@ -20,6 +20,7 @@ public class AidController {
     private final AidService aid;
     private final AidFamilyRepo familyRepo;
     private final AidDistributionRepo distRepo;
+    private final AidDistributionItemRepo distItemRepo;
     private final AidIssueRepo issueRepo;
     private final AidIssueEventRepo eventRepo;
     private final AidVisitRepo visitRepo;
@@ -29,11 +30,13 @@ public class AidController {
     private final FileStorage storage;
 
     public AidController(AidService aid, AidFamilyRepo familyRepo, AidDistributionRepo distRepo,
-                         AidIssueRepo issueRepo, AidIssueEventRepo eventRepo, AidVisitRepo visitRepo,
+                         AidDistributionItemRepo distItemRepo, AidIssueRepo issueRepo,
+                         AidIssueEventRepo eventRepo, AidVisitRepo visitRepo,
                          AidValueRepo valueRepo, ViewMapper vm, CurrentUser cu, FileStorage storage) {
         this.aid = aid;
         this.familyRepo = familyRepo;
         this.distRepo = distRepo;
+        this.distItemRepo = distItemRepo;
         this.issueRepo = issueRepo;
         this.eventRepo = eventRepo;
         this.visitRepo = visitRepo;
@@ -230,6 +233,16 @@ public class AidController {
         m.put("handNote", d.getHandNote());
         m.put("rehandled", d.isRehandled());
         m.put("createdAt", d.getCreatedAt());
+        // 来源单发放明细：逐单预占/已发放件数（库存锁定的落账依据）
+        m.put("items", distItemRepo.findByDistributionIdOrderByIdAsc(d.getId()).stream()
+                .map(i -> {
+                    Map<String, Object> im = new LinkedHashMap<>();
+                    im.put("orderId", i.getOrder().getId());
+                    im.put("orderCode", i.getOrder().getCode());
+                    im.put("reservedQuantity", i.getReservedQuantity());
+                    im.put("distributedQuantity", i.getDistributedQuantity());
+                    return im;
+                }).toList());
         m.put("issues", issueRepo.findByDistributionIdOrderByCreatedAtAsc(d.getId()).stream()
                 .map(i -> Map.of("id", i.getId(), "type", i.getType().name(),
                         "typeLabel", AidService.typeLabel(i.getType()), "status", i.getStatus().name()))

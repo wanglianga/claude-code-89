@@ -22,17 +22,19 @@ public class PublicController {
     private final UserRepo userRepo;
     private final PartnerRepo partnerRepo;
     private final AidDistributionRepo distRepo;
+    private final AidDistributionItemRepo distItemRepo;
     private final ViewMapper vm;
 
     public PublicController(BatchRepo batchRepo, OrderRepo orderRepo, SortReviewRepo sortRepo,
                             UserRepo userRepo, PartnerRepo partnerRepo, AidDistributionRepo distRepo,
-                            ViewMapper vm) {
+                            AidDistributionItemRepo distItemRepo, ViewMapper vm) {
         this.batchRepo = batchRepo;
         this.orderRepo = orderRepo;
         this.sortRepo = sortRepo;
         this.userRepo = userRepo;
         this.partnerRepo = partnerRepo;
         this.distRepo = distRepo;
+        this.distItemRepo = distItemRepo;
         this.vm = vm;
     }
 
@@ -58,7 +60,8 @@ public class PublicController {
             List<AidDistribution> ds = distRepo.findAllByOrderByCreatedAtDesc().stream()
                     .filter(d -> d.getBatch().getId().equals(b.getId())).toList();
             if (ds.isEmpty()) continue;
-            int handed = ds.stream().mapToInt(d -> d.getActualQuantity() == null ? 0 : d.getActualQuantity()).sum();
+            // 公示只统计真实已发放数量：按发放明细的已签收件数汇总（取消/退回/换货旧任务不计）
+            int handed = ds.stream().mapToInt(this::distributedQuantity).sum();
             boolean allHidden = ds.stream().allMatch(d -> d.getFamily().isPublicHidden());
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("batchCode", b.getCode());
@@ -78,6 +81,18 @@ public class PublicController {
             out.add(m);
         }
         return out;
+    }
+
+    /** 任务真实已发放件数：优先按来源单发放明细汇总；
+     *  无明细的历史数据回退到已完成任务的实领数（取消/退回不计）。 */
+    private int distributedQuantity(AidDistribution d) {
+        List<AidDistributionItem> items = distItemRepo.findByDistributionIdOrderByIdAsc(d.getId());
+        if (items.isEmpty()) {
+            boolean done = d.getStatus() == AidDistributionStatus.HANDED_OUT
+                    || d.getStatus() == AidDistributionStatus.EXCHANGED;
+            return done && d.getActualQuantity() != null ? d.getActualQuantity() : 0;
+        }
+        return items.stream().mapToInt(AidDistributionItem::getDistributedQuantity).sum();
     }
 
     @GetMapping("/stats")
